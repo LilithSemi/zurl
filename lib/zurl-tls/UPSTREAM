@@ -1,0 +1,689 @@
+Vendored copy of the standard library TLS client.
+
+Zig version: 0.16.0
+Source path: /nix/store/afbxfxrx3fmvhzp7ni9li5l3v2fbw7yn-zig-0.16.0/lib/zig/std/crypto/tls/Client.zig
+Line count at copy time: 1670
+
+Why this file is here
+---------------------
+The standard library client cannot connect to a server that has an ECDSA
+certificate and speaks only TLS 1.2. Measured against curl 8.21.0:
+
+    ecc256.badssl.com     ECDSA, TLS 1.2   std fails, curl works
+    ecc384.badssl.com     ECDSA, TLS 1.2   std fails, curl works
+    tls-v1-2.badssl.com   RSA,   TLS 1.2   both work
+    cloudflare.com        ECDSA, TLS 1.3   both work
+
+There are two causes, one behind the other.
+
+The first is the suite list at the end of the file. Every TLS 1.2 suite in it
+is an `ECDHE_RSA` suite, and there is no `ECDHE_ECDSA` suite. A server that
+holds only an ECDSA certificate and offers only TLS 1.2 therefore shares no
+suite with the client, and it sends a `handshake_failure` alert. The TLS 1.3
+suites name no signature algorithm, which is why the same server works over
+TLS 1.3.
+
+The second is in `CertificatePublicKey.verifySignature`. TLS 1.2 codes an
+ECDSA signature as a hash and a signature algorithm, and the two are free of
+each other. RFC 5246 section 7.4.1.4.1 and RFC 8422 section 5.1.3 say so. TLS
+1.3 gave the same code points names that fix the curve as well, and RFC 8446
+section 4.2.3 requires the curve of the key to be the curve in the name.
+Upstream reads the TLS 1.3 meaning always. So a TLS 1.2 server that holds a
+P-256 key and signs the Server Key Exchange with SHA-384 makes upstream parse
+a P-256 point as a P-384 point, and it reports `InvalidEncoding`.
+`ecc256.badssl.com` does exactly that:
+
+    openssl s_client -connect ecc256.badssl.com:443 \
+        -servername ecc256.badssl.com -sigalgs 'ECDSA+SHA256:ECDSA+SHA384'
+    Peer signature type: ecdsa_secp384r1_sha384
+    Server public key is 256 bit
+
+Fixing only the suite list therefore moves `ecc256.badssl.com` from an alert
+to `InvalidEncoding` and leaves it broken.
+
+Only this one file is vendored. Everything the patch needs from
+`std/crypto/tls.zig` and `std/crypto/Certificate.zig` is already there and
+public:
+
+* `tls.CipherSuite` already holds the six `ECDHE_ECDSA` values.
+* `tls.CipherSuite.with` already maps each of them to the same record cipher
+  as its `ECDHE_RSA` twin.
+* The Client Hello already advertises `ecdsa_secp256r1_sha256` and
+  `ecdsa_secp384r1_sha384` in `signature_algorithms`.
+* `Certificate.Parsed.PubKeyAlgo` already carries the named curve of an EC
+  key, and the call site in `init` already passes that union. Upstream throws
+  the curve away at the field.
+* `Certificate.NamedCurve.Curve` already gives the P-256 and P-384 types, and
+  `crypto.sign.ecdsa.Ecdsa` already takes a curve and a hash apart.
+* `std.crypto.Certificate.verify` already handles `ecdsa_with_SHA256` and
+  `ecdsa_with_SHA384`, so the chain check needs nothing.
+
+So `tls.zig` and `Certificate.zig` stay upstream.
+
+How to re-sync
+--------------
+1. Copy the new upstream `Client.zig` over this file.
+2. Change `@import("../../std.zig")` to `@import("std")`, and keep the
+   `ZURL PATCH` comment that sits on that line.
+3. Reapply the patch below, item by item. Every patched line carries a
+   `ZURL PATCH` comment, so `grep -n 'ZURL PATCH' Client.zig` finds all of
+   it. A comment that runs over several lines carries one on its first line,
+   and the block at the end of the file carries one on the line that opens
+   it.
+
+   **Work from the numbered list, not from the guard.** `check-vendor`
+   reports a change nobody wrote down. It cannot report a patch that got
+   lost, because a lost patch leaves this file agreeing with upstream. So a
+   re-sync that skips item 13 reverts the host check and the guard still
+   says the copy is clean. The list is the only record of what must come
+   back.
+4. Run `zig build test --summary all`.
+5. Run `zig build check-vendor`. It compares this file with the same file in
+   the Zig that the flake gives, and it fails on a changed line that no marker
+   accounts for. It reads the library directory of that Zig while it runs, so
+   it needs no edit when Zig changes.
+
+   The guard counts the upstream lines a hunk drops against the lines of
+   **code** the hunk puts back with a marker. A comment line pays for
+   nothing, because a comment runs nothing. So a patch that replaces two
+   upstream lines needs two marked lines of code, however much comment it
+   also carries.
+6. Update the version, the path, and the line count above.
+
+The second reason this file is here
+-----------------------------------
+Upstream sends no ALPN extension at all. RFC 7301 makes that extension the
+only way a client and a server agree on the protocol above TLS, so a server
+that would offer HTTP/2 never gets the chance to say so, and curl needs the
+chance. `zurl-net/Connection.zig` offers `h2` and then `http/1.1`, and
+`zurl-http/h2.zig` speaks the answer.
+
+Nothing else in `std` has to move for this. `tls.ExtensionType` already holds
+`application_layer_protocol_negotiation`, and `tls.Decoder` already bounds a
+sub-decoder at a length the peer wrote.
+
+The third reason this file is here
+----------------------------------
+Upstream cannot verify a certificate for an address, and it walks a subject
+alternative name block with no bound.
+
+`Certificate.Parsed.verifyHostName` reads a `dNSName` and skips every other
+kind of general name. A certificate for an address carries an `iPAddress`
+name, tag 7, so that walk matches none. `https://1.1.1.1/` and
+`https://8.8.8.8/` failed with `error.CertificateHostMismatch`, and curl
+8.21.0 fetches both. Every IPv6 literal over `https` failed the same way.
+
+The same walk trusts every length the certificate wrote. `der.Element.parse`
+reads two octets past an index with no bound, reads each long form length
+octet with no bound, and adds the length to the index in `u32`, which can
+pass the end of the block and can wrap. A leaf certificate holding the six
+bytes `30 20 82 1E 61 62` panicked the client with "index out of bounds:
+index 34, len 6". `init` runs the host check on the leaf before any trust
+check, so those six bytes crashed the client before authentication.
+
+The fifth reason this file is here
+----------------------------------
+Upstream accepts a forged certificate for any host, signed by any
+certificate that chains to a trusted root.
+
+`Certificate.Parsed.verify` checks three things and no more: that the
+subject's issuer name equals the issuer's subject name, that the subject is
+inside its validity dates, and that the signature holds. It reads neither
+`basicConstraints` nor `keyUsage`. `Certificate.zig` names the object
+identifier of both extensions in `ExtensionId` and it consults neither
+during verification. `Bundle.verify` calls the same function. So upstream
+treats every certificate in a chain as able to issue.
+
+An attacker buys a free domain validated certificate for a name they own.
+They sign a certificate for a name they do not own with that leaf's private
+key, and they send the two together:
+
+    cert[0]  leaf, subject alternative name = victim.test,
+             issuer = attacker.test, signed with the attacker's leaf key
+    cert[1]  the real attacker.test leaf, issued by a real intermediate
+    cert[2]  the real intermediate
+
+The host walk passes on cert[0], the leaf key of cert[1] checks the
+signature on cert[0] because the attacker made it, and the trust store
+finds the real root for cert[2]. The CertificateVerify message is then
+checked under a key the attacker holds. That is a machine in the middle of
+every HTTPS transfer, and of every HTTP/3 transfer, for the price of one
+domain validated certificate.
+
+RFC 5280 gives three rules that close it:
+
+* Section 4.2.1.9: a certificate whose key checks a certificate signature
+  must carry `basicConstraints` with `cA` TRUE.
+* Section 4.2.1.3: if that certificate carries `keyUsage`, the extension
+  must assert `keyCertSign`.
+* Section 4.2.1.9: `pathLenConstraint` counts the certificates that may sit
+  between the issuer and the leaf.
+
+`verifyIssued` in the appended block holds all three, and it is the only
+place they live. See item 17.
+
+The patch
+---------
+There are nineteen places, and three of them are inside the appended block
+of item 14, so those change no upstream line. The first of them belongs to
+the copy itself rather than to ECDSA:
+
+0. The import at the top of the file. This copy does not sit inside the
+   standard library, so it reads `@import("std")` where upstream reads a
+   relative path.
+
+The suite list, which fixes the alert:
+
+1. The doc comment above `cipher_suites`, which says why the list holds two
+   forms of each TLS 1.2 suite.
+
+2. Six lines in `cipher_suites`, three in each arm of the `if`. Each one adds
+   the `ECDHE_ECDSA` form beside the `ECDHE_RSA` form that upstream has. The
+   ECDSA form comes first in each pair, which agrees with the order that curl
+   and OpenSSL send, so a server that holds both certificates gives the faster
+   one.
+
+3. Three lines in the Server Hello switch that builds the handshake cipher.
+   `CipherSuite.with` maps the ECDSA form and the RSA form to the same record
+   cipher, so the body of the arm holds for either one.
+
+4. Three lines in the `tls_1_2` switch that moves the handshake on to the
+   certificate. The key exchange is ECDHE for both forms.
+
+The signature check, which fixes `InvalidEncoding`:
+
+5. The `algo` field of `CertificatePublicKey` and the parameter of its `init`.
+   Both hold `Certificate.Parsed.PubKeyAlgo` in place of the tag
+   `Certificate.AlgorithmCategory`, so the named curve of an EC key travels
+   with the key. The call site in `init` passes that union already, so it does
+   not change. The one comparison that read the field as a tag now takes the
+   tag out of the union.
+
+6. Four members of `VerifyError`, for the four combinations of curve and hash
+   that the check can now build. Upstream lists only the two that a TLS 1.3
+   scheme name allows.
+
+7. One parameter of `verifySignature`, `tls_version`, and the two call sites
+   that pass it. The version is what decides whether the curve of the scheme
+   name is binding.
+
+8. The ECDSA arm of `verifySignature`, which now calls `verifyEcdsa` in the
+   appended block.
+
+The version ceiling, which gives curl's `--tls-max` an answer:
+
+9. `Options.max_version`, a `grease_version` constant, and one block in
+   `init` after `cleartext_header_buf`. The block runs only for a ceiling of
+   TLS 1.2. It writes the GREASE version RFC 8701 reserves over the TLS 1.3
+   entry of `supported_versions`, so the list still holds two entries and
+   every length in the hello stays what upstream computed. A server must
+   ignore a GREASE value, so the hello then offers TLS 1.2 alone. The block
+   reads the two bytes back with `std.debug.assert` before it writes them.
+   That assert is compiled out in ReleaseFast, so it is a check for a
+   developer and not a guarantee for a user. The wire byte test in the
+   appended block is what holds the offset in place in every build.
+   `cleartext_header_buf` becomes a `var` for this, and nothing else about it
+   changes.
+
+ALPN, which is the precondition for HTTP/2:
+
+10. `Options.alpn_protocols`, two members of `InitError`, and the `alpn`
+   field of `Client`. The option is the list of protocol names the hello
+   offers, in the order of preference, and an empty list sends no extension,
+   which is curl's `--no-alpn`. `TlsAlpnOfferInvalid` answers a list with no
+   wire form, and `TlsAlpnProtocolNotOffered` answers a peer that chose a
+   name the hello did not carry. The field holds the answer by value,
+   because a `Client` is copied into whatever owns the session.
+
+11. Five places in `init`, and one line each.
+
+   The extension is built after `key_share`, into a stack buffer, by
+   `encodeAlpn` in the appended block. It cannot go inside
+   `cleartext_header_buf`: that buffer is built at compile time from `++`,
+   and the list is a run-time length. So the bytes travel the way the host
+   name already travels, as another slice of the `writeVecAll` call, and the
+   `iovecs` array grows from two entries to three.
+
+   Three lengths then have to count it, and each takes the one added term
+   `+ alpn_extension.len`: the length of the extensions block, the `u24`
+   length of the handshake message, and the `u16` length of the record.
+   Each of the three already carried `- server_name_extension.len +
+   server_name_extension_len` for the host, which is the same arithmetic for
+   the same reason.
+
+   The transcript hash takes the extension as well, as "Client Hello part
+   3", because the hash covers every byte of the hello that went out.
+
+   The answer is read in two places, because the two versions carry it in
+   different messages. TLS 1.2 answers in the Server Hello, and the arm
+   there puts the name in `alpn_hello`. That record is not authenticated
+   when it is read, and a TLS 1.3 server answers in EncryptedExtensions
+   instead, so `alpn_hello` reaches `alpn_selected` only where the
+   negotiated version is TLS 1.2. TLS 1.3 answers in the
+   `encrypted_extensions` arm.
+
+   Upstream's `encrypted_extensions` arm reads the extension into `extd` and
+   drops it with `_ = extd;`. The patch replaces that one discard line with
+   `var alpn_extd = extd;`, and the ALPN arm consumes the copy. So the line
+   above it stays exactly as upstream wrote it, and one marked line stands
+   for one removed line.
+
+The version floor and the downgrade sentinel:
+
+12. One term in the `tls_1_2` arm of the Server Hello version switch:
+   `options.max_version != .tls_1_2 and`. RFC 8446 section 4.1.3 asks a
+   client that **offered** TLS 1.3 to abort on the "DOWNGRD" sentinel,
+   because the sentinel then means an attacker took TLS 1.3 out of the
+   hello. A client that offered TLS 1.2 alone, which is `--tls-max 1.2`,
+   asked for exactly what it got, and a server that speaks TLS 1.3 sets the
+   sentinel anyway. Measured: `--tls-max 1.2` against cloudflare.com aborted
+   here, where curl runs. Without item 9 this term must go, because a hello
+   that always offers TLS 1.3 must always abort on the sentinel.
+
+The host check, which fixes an address and closes a panic:
+
+13. One line in the `certificate` arm of `init`: the `.explicit` case calls
+   `verifyHost` in the appended block, where upstream calls
+   `subject.verifyHostName(host)`. That call runs on the leaf certificate,
+   before the chain check, so everything it reads is bytes any server can
+   send. See item 14 for what it calls.
+
+The chain rules, which close the forged leaf:
+
+16. One line in the `certificate` arm of `init`, where the walk checks a
+   certificate against the one before it. Upstream reads
+   `try prev_cert.verify(subject, now_sec);`. The copy reads
+   `try verifyIssued(prev_cert, subject, chain_host, cert_index - 1,
+   now_sec);`, which is the same check with the RFC 5280 rules in front of
+   it. See item 17.
+
+   One more line in the same arm, where the walk reads the leaf:
+   `try verifyEndEntity(subject, trust_checked);`. A server whose leaf was
+   signed by a root of the trust store sends one certificate, so
+   `verifyIssued` never runs for that chain and the rules a leaf must obey
+   on its own need a call of their own. See item 17.
+
+   Two lines before the loop that read `chain_host` and `trust_checked`
+   out of `Options`. `chain_host` is the host of the session, which every
+   `nameConstraints` in the chain must allow. `trust_checked` says whether
+   the caller asked for a trust check at all.
+
+   `InitError` grows by `|| IssuerError` on the line that closes the set,
+   so the three new names reach every caller. That line carries a marker
+   and the comment above it says why.
+
+   One line in `CertificatePublicKey.init`. Upstream refuses a
+   `subjectPublicKey` that is too long and takes one that is empty. A
+   BIT STRING of `03 01 00` parses cleanly and gives a key of no bytes,
+   which reached an assert in Debug and a signature check in ReleaseFast.
+   The line now refuses `pub_key.len == 0` as well.
+
+The appended block:
+
+14. A block at the end of the file, after a marker comment. It holds
+   `CertificateEcdsa`, `schemeCurve` and `verifyEcdsa`, which are the ECDSA
+   check that item 8 calls. It holds `alpn_max_protocol_len`,
+   `alpn_max_list_len`, `alpn_extension_max`, `AlpnSelection`,
+   `alpnProtocol`, `encodeAlpn` and `readAlpn`, which are the ALPN parts
+   that item 11 calls.
+
+   It holds `WriteLock`, which is the lock of item 19.
+
+   It holds `WantedName`, `verifyHost`, `parseName`, `walkSubjectAltNames`
+   and `checkHostName`, which are the host check that item 13 calls.
+   `verifyHost` reads the host as an address and, on either answer, calls
+   the one walk. `walkSubjectAltNames` is that walk, and it reads a
+   `dNSName` for a name and an `iPAddress` for an address. `parseName` is
+   the only way the walk reads a DER element, and it is where every bound
+   lives: the two octets of the header, each long form length octet, and the
+   end of the value, all against the length of the block, all in `u64` so no
+   sum can wrap. **A third kind of host must go through `parseName` as
+   well.** There is no second walk to write one in, which is the point of
+   the shape.
+
+   `checkHostName` is the one part of the block that is upstream text.
+   `Certificate.Parsed.checkHostName` is private to `std/crypto/Certificate.zig`,
+   so the walk cannot call it. Compare the two at each Zig bump: a change to
+   the wildcard rule upstream must be copied here.
+
+   The block also holds the tests that keep the whole patch in place. The
+   tests read the offered suite list, they drive `init` with a Server Hello
+   that the block itself builds, they read back the bytes of one Client
+   Hello and check every length in it, they run the host check over subject
+   alternative name blocks the block itself builds, truncated ones included,
+   and they sign and verify with keys that the block itself makes. No test
+   in it opens a socket.
+
+   `encodeAlpn` writes the two outer lengths last, from the position the
+   names reached, so neither one can name a count that the bytes do not
+   hold. `readAlpn` reads the peer's answer inside a decoder that covers
+   the extension and nothing else, it refuses a list that is not exactly
+   one name, and it compares that name against the offered list. A name
+   outside the list is `TlsAlpnProtocolNotOffered` and the handshake stops,
+   because a session carrying a protocol zurl cannot parse is worse than no
+   session. A peer that sends no extension is not a fault: RFC 7301 lets a
+   server that shares no protocol leave it out, and `alpnProtocol` then
+   gives null.
+
+The fourth reason this file is here
+-----------------------------------
+QUIC carries the TLS 1.3 handshake in CRYPTO frames and not in TLS
+records, and it asks TLS for a secret at each of three encryption levels.
+RFC 9001 sections 4 and 5. `init` above can give neither: it reads records
+and it produces a record cipher.
+
+The package `zurl-quic-tls` runs that handshake instead. **It holds no
+certificate code at all.** The chain walk, the host name walk, the address
+walk, the trust store, the CertificateVerify check, the Diffie-Hellman,
+and the ALPN offer are all in this file, and that package calls them. So a
+trust rule added here reaches HTTP/3 on the day it lands, and QUIC gets no
+second path with weaker checks.
+
+15. A namespace named `quic`, in the appended block, which is the whole of
+   that door. Nothing outside the block changed for it, so `check-vendor`
+   sees no new hunk and a re-sync needs no extra step.
+
+   `KeyExchange` wraps `KeyShare`, so both transports generate the same
+   key pairs from the same 176 byte seed and run the same scalar
+   multiplication. `writeShare` writes one `KeyShareEntry`, and it refuses
+   a group outside `key_share_groups`.
+
+   `CertificateKey` wraps `CertificatePublicKey`, so the ECDSA curve rule
+   of item 8, the RSA modulus widths, and the Ed25519 arm are the ones
+   `init` uses. It passes `.tls_1_3` always, because RFC 9001 section 4.2
+   gives QUIC no other version, so the curve rule stays the strict one.
+
+   `verifyCertificate` runs the whole certificate check of one TLS 1.3
+   Certificate message: `verifyHost` on the leaf, `verifyIssued` between
+   neighbours, and `Options.ca` for the trust root, in the order the
+   `certificate` arm of `init` uses. **It is a second walk of the DER list
+   and not a second set of rules**, and item 17 is what makes that
+   sentence true instead of hopeful. It could not call into `init`
+   instead: replacing that arm's eighty lines with one call would drop
+   more upstream lines than a marked line puts back, which the guard
+   refuses. `host` and `ca` are `@FieldType(Options, ...)`, so a change to
+   either field's shape reaches this call at compile time.
+
+   `encodeAlpnExtension` and `readAlpnAnswer` are `encodeAlpn` and
+   `readAlpn`, so a QUIC hello and a TLS hello carry the same offer and
+   check the same answer. The one difference belongs to the caller: RFC
+   9001 section 8.1 makes ALPN mandatory for QUIC, so the QUIC handshake
+   reports a missing extension as a fault where a TLS session accepts it.
+
+17. `max_chain_certificates`, `IssuerRights`, `IssuerError`,
+   `ExtensionError`, `oid_basic_constraints`, `oid_key_usage`,
+   `oid_subject_alt_name`, `oid_name_constraints`, `oid_ext_key_usage`,
+   `oid_any_ext_key_usage`, `oid_server_auth`, `issuerRights`,
+   `readBasicConstraints`, `readKeyUsage`, `readExtKeyUsage`,
+   `checkNameConstraints`, `SubtreeMatch`, `walkSubtrees`, `dnsInSubtree`,
+   `addressInSubtree`, `verifyEndEntity` and `verifyIssued`, in the
+   appended block. They are the chain rules of the fifth reason above.
+
+   **An extension marked critical that this file does not read refuses the
+   certificate.** RFC 5280 section 4.2 and section 6.1.4 (f) say so, and
+   `issuerRights` holds the rule for every certificate of a chain except
+   the trust anchor. It is what keeps this client closed when an extension
+   nobody has written yet arrives, and it is why `nameConstraints`,
+   `policyConstraints` and `inhibitAnyPolicy` can no longer be dropped in
+   silence.
+
+   **`nameConstraints` binds the host of the session.** RFC 5280 section
+   4.2.1.10 lets an authority bind the authorities below it to a name
+   space, and the CA/Browser Forum Baseline Requirements let such a
+   sub-authority go without an audit because clients hold it to that name
+   space. `checkNameConstraints` reads the host the user asked for, which
+   is the one name the session authenticates, and refuses a chain that may
+   not answer for it. A `dNSName` subtree and an `iPAddress` subtree name
+   a TLS server; a subtree of any other kind is refused, because this side
+   cannot prove the certificate obeys it.
+
+   **`extendedKeyUsage` must name server authentication.** RFC 5280
+   section 4.2.1.12: a certificate that carries the extension may be used
+   for the purposes it names and for no other, so a key bound to
+   electronic mail or to code signing stands behind no TLS server. Both a
+   leaf and a certificate authority answer this rule.
+
+   **`verifyIssued` is the one place the chain rules live.** Both walks of
+   a certificate list call it: the `certificate` arm of `init` for TLS
+   over TCP, and `quic.verifyCertificate` for the handshake QUIC carries
+   in CRYPTO frames. Neither one calls `Certificate.Parsed.verify` for a
+   neighbour any more, so a rule added to `verifyIssued` reaches both
+   transports on the day it lands. A test named "both certificate walks
+   call the one chain rule" reads this file's own source and holds that
+   shape in place.
+
+   The walk cannot be collapsed further than that. The two loops read
+   different bytes: a TLS 1.2 Certificate message carries no request
+   context and no per-certificate extensions, and `init` also builds a
+   `Certificate.Chain` and moves `handshake_state`. Replacing the
+   thirty-six upstream lines of that arm with one call would drop more
+   upstream lines than marked lines put back, and the guard refuses that.
+   So the **rules** are one function and the **byte reader** is two loops,
+   and the drift the guard cannot see is the drift that no longer
+   matters.
+
+   `issuerRights` reads the `[3] EXPLICIT Extensions` field of the
+   `tbsCertificate`. Every element it reads goes through `parseName`, the
+   one bounded reader of item 14, so a length the peer wrote cannot pass
+   the end of the buffer and cannot wrap. It walks the fields of the
+   `tbsCertificate` in order and stops at the one tagged `[3]`, so no
+   earlier field can be read as the extensions block. A certificate below
+   version 3 carries no extensions and gets the default answer, which says
+   it is not a certificate authority.
+
+18. The tests for item 17, in the appended block. They mint real X.509
+   version 3 certificates with a DER writer that works from the inside
+   out, they sign them with real P-256 keys, and they run them through
+   `verifyIssued` and through `quic.verifyCertificate` with a real
+   `Certificate.Bundle`. The attack test builds the three certificate
+   chain of the fifth reason and asserts `CertificateIssuerNotCa`. Its
+   control builds a chain that follows RFC 5280 and asserts that the same
+   walk takes it. No test reads a file and no test opens a socket.
+
+The sixth reason this file is here
+----------------------------------
+Upstream couples the read path to the write path, so one session cannot be
+driven by two tasks.
+
+Everything else about the two paths is independent. The read path decrypts
+with `server_key` and counts with `read_seq`, the write path encrypts with
+`client_key` and counts with `write_seq`, and `input` and `output` are two
+buffers over one socket. The one exception is a TLS 1.3 `key_update` of kind
+`update_requested`: RFC 8446 section 4.6.3 makes a peer that asks for one
+expect the other side to rotate its own write keys, so that arm of
+`readIndirect` writes `client_secret`, `client_key`, `client_iv`, and
+`write_seq`. A task that was encrypting a record at that moment would use
+half of one key and half of another, and a `write_seq` that went back to
+zero under an unchanged key would repeat a nonce.
+
+`zurl-http/h2.zig` needs the two paths to run at once. An HTTP/2 connection
+that several transfers share has one task inside the frame read while
+another writes a request, and a design that let the reader hold a lock over
+the read would serialise the transfers it exists to overlap. That is the
+finding `p4-h2-complete-report.md` recorded, and this is what closes it.
+
+19. One field, `write_lock`, and two pairs of lines.
+
+   The field holds a lock the owner of the session gives, or null. A
+   `Client` cannot name a lock of its own: `std.Io.Mutex` needs the
+   `std.Io` of the caller and a `Client` holds none, and a
+   `std.Thread.Mutex` would stop a whole thread of an event loop that runs
+   several tasks on one thread. So `WriteLock` in the appended block is a
+   two-call vtable, and `zurl-net/Connection.shareBetweenTasks` fills it
+   with the connection's own `std.Io.Mutex`.
+
+   The `.update_requested` arm of `readIndirect` takes the lock around the
+   rotation, and `prepareCiphertextRecord` takes it for as long as it
+   encrypts. Those are the only two places that touch the write keys or
+   `write_seq`.
+
+   **No upstream line is dropped.** All four lines are added, so the hunks
+   cost nothing against the guard's count, and a session with no lock runs
+   one compare and no lock at all: the behaviour of a `Client` that nobody
+   shares is byte for byte upstream's.
+
+   **No syscall runs under the lock.** `drain`, `flush`, and `end` each ask
+   `output` for room before they call `prepareCiphertextRecord`, so the
+   flush that a full socket buffer needs has already happened. What is
+   left under the lock is the AEAD, which is arithmetic. So a reader that
+   waits for the lock waits for one record's encryption and never for a
+   peer.
+
+   **What this does not fix.** Upstream rotates its write keys on an
+   `update_requested` and sends no `KeyUpdate` message of its own, which
+   RFC 8446 section 4.6.3 requires. The peer therefore never learns when
+   to change its read keys. That is an upstream defect and this patch
+   keeps it exactly as it is: the rotation happens at the same record it
+   always happened at, and only the task that performs it changed.
+
+20. Four lines that bound a length the peer wrote, one in `init` and three
+   in `readIndirect`. Each one stands in front of a subtraction that
+   upstream leaves open, and each one refuses an input that made the
+   subtraction wrap.
+
+   `readIndirect` reads the two octet length of the record header and
+   checks it against `max_ciphertext_len` alone, which bounds it from
+   above and not from below. The TLS 1.3 arm then subtracts the tag
+   length and the TLS 1.2 arm subtracts the explicit IV and the tag, both
+   in `u16`. The five octets `17 03 03 00 00` from the server therefore
+   gave a length of 65520, the `take` of that length failed into a `catch
+   unreachable`, and the record cipher wrote into a slice whose length the
+   optimiser was free to choose. The same function then strips the zero
+   padding of a TLS 1.3 record and reads the inner content type at
+   `msg.len - 1`, which wraps for a plaintext of all zero octets. RFC 8446
+   section 5.4 makes such a record one to refuse.
+
+   The handshake loop of `init` has the third shape of the same fault: it
+   adds the length of the stripped plaintext to `cleartext_fragment_end`
+   and then steps back one octet to the inner content type. A record that
+   decrypts to no octets left nothing to step back over.
+
+   Upstream's own handshake loop carries the two lower bounds on
+   `record_len` that `readIndirect` does not, so this is an omission
+   upstream made and not a rule this side invented. The tests are in
+   `test_server.zig`, under `Options.fault`, and each one drives the
+   shipped client against a server that sends the record.
+
+21. One line in `init` that bounds the host before it is cast, one line in
+   `verifySignature` that refuses `rsa_pkcs1_sha1`, one member dropped from
+   the offered `signature_algorithms`, and one modulus width dropped from
+   the RSA arm of `verifySignature`. The cryptographic floor.
+
+   Upstream offers `rsa_pkcs1_sha1` in every client hello and accepts it in
+   `CertificateVerify`. RFC 8446 section 4.4.3 forbids it there outright
+   and RFC 9155 deprecates SHA-1 in every TLS signature. Measured on the
+   wire: curl 8.21.0 with OpenSSL 3.6.3 offers 26 signature schemes and not
+   one of them is SHA-1. zurl now offers twelve and none is SHA-1 either.
+   The two `switch` prongs for the scheme stay as upstream wrote them, and
+   the line in front of them makes both unreachable, so the hunk is one
+   added line and not two removals.
+
+   Upstream also accepts a 128 octet RSA modulus, which is 1024 bits. The
+   CA/Browser Forum Baseline Requirements section 6.1.5 and NIST SP 800-57
+   Part 1 Revision 5 both put the floor at 2048 bits, and no public
+   authority has issued a shorter key for many years.
+
+   `host_len` was an `@intCast` of a count that reaches this file from a
+   url, and a url reaches zurl from a `Location` header. An `@intCast` that
+   does not fit panics a checked build and is undefined behaviour in the
+   ReleaseFast build a user runs, so the bound is a named refusal in front
+   of it. See `host_name_max`.
+
+22. Two lines in the `key_update` arm of `readIndirect`, and one line in
+   front of the sub-message loop above it.
+
+   The arm reads `p.tls_1_3` out of `tls.ApplicationCipher`, whose payload
+   is an **untagged** union, and it never looks at the negotiated version.
+   On a TLS 1.2 session it therefore read the live `tls_1_2` bytes as a TLS
+   1.3 key schedule and wrote the result back over the live keys. No safety
+   check stands in front of an untagged union in any build mode. RFC 8446
+   section 4.6.3 gives `key_update` to TLS 1.3 alone.
+
+   The same arm reads `handshake[0]`, the `request_update` octet that says
+   whether the write keys rotate too, and a `handshake_len` of zero passed
+   the bound above it and left that slice empty.
+
+   The loop itself read all four octets of a sub-message header before it
+   checked that four octets were there, so an inner plaintext of one to
+   four octets read the three octet length out of the record before this
+   one, which the same peer wrote.
+
+23. `verifyCertificateStrength`, in the appended block, called once for
+   every certificate of both walks. `verifyEndEntity` reads the leaf and
+   `verifyIssued` reads a pair, so the certificate at the point where the
+   trust store answers passes through neither one as the subject, and its
+   signature is the one the root made. The test *"both certificate walks
+   call the one chain rule"* counts the call text of all three.
+
+24. Two rules in `certificate.zig`, which is the bounded walk of item 20.
+
+   The subject alternative names now come from 2.5.29.17 and from nothing
+   else. `std.crypto.Certificate.ExtensionId` maps 2.5.29.7, the retired
+   X.509(1988) spelling that no authority profiles or validates, to the
+   same value, and the standard walk let the last of the two win. A
+   certificate whose 2.5.29.17 named what the authority signed for,
+   followed by a 2.5.29.7 naming something else, sent the host check to the
+   second block. A second instance of 2.5.29.17 is refused as well: RFC
+   5280 section 4.2 forbids it, and a walk that reads one of the two is
+   guessing.
+
+   The `signature` field of the `tbsCertificate` and the outer
+   `signatureAlgorithm` field are now compared, whole DER against whole
+   DER, which RFC 5280 section 4.1.1.2 asks for and which OpenSSL's
+   `X509_ALGOR_cmp` does. The signature covers the inner field and the
+   outer field picks the verifier, so two different names hand the verifier
+   an algorithm the signer never signed.
+
+What the patch does not change
+------------------------------
+The patch adds no CBC suite. The record cipher for a CBC suite is in
+`tls.CipherSuite.With`, but the TLS 1.2 arm of this client builds only an AEAD
+record cipher. A CBC suite would need much more than a name in a list, and
+every server that matters offers a GCM or a ChaCha20 suite.
+
+The patch adds no P-521. `Certificate.NamedCurve.Curve` refuses that curve at
+compile time, so `verifyEcdsa` reports `TlsBadSignatureScheme` for it, which
+is what upstream does as well.
+
+The patch does not make TLS 1.3 lenient. `verifyEcdsa` takes the curve from
+the certificate only for TLS 1.2. Over TLS 1.3 it still refuses a scheme name
+whose curve is not the curve of the key.
+
+The patch speaks no HTTP/2 itself. It offers the protocol names the caller
+gives it and it reports the one the peer chose. `zurl-net/Connection.zig`
+gives it `h2` and then `http/1.1`, and `zurl-http/h2.zig` is the engine that
+reads the answer.
+
+The patch does not choose a trust store. The host check of item 13 answers
+one question, which is whether the leaf names the host that was asked for.
+`init` runs the chain check after it, through `Options.ca`.
+
+The patch adds no certificate policy check. RFC 5280 section 4.2.1.11
+matters and it is not here. A `policyConstraints` extension is always
+critical, so a certificate that carries one is refused by item 17 rather
+than accepted with the constraint dropped, which is the closed answer.
+`verifyIssued` is where the check goes, and adding it there reaches both
+transports.
+
+The name constraint check reads the host of the session and not every name
+of the leaf. A name in the leaf that the constraint forbids and that
+nobody asked for authenticates nothing, and the record buffer holds two
+certificates at a time, so a copy of the leaf's names would have to be
+made. RFC 5280 section 6.1.4 (g) asks for every name; this reads the one
+that decides the session.
+
+The TLS 1.2 arm of the `key_update` guard has no test of its own. The
+fixture in `test_server.zig` speaks TLS 1.3 only, and a second fixture for
+one line is not worth its weight. The guard reads `c.tls_version`, which
+`init` sets from the Server Hello, and the TLS 1.3 arm of the same guard is
+driven by `Options.fault.empty_key_update`.
+
+The patch does not decide whether an HTTPS transfer detects truncation.
+`allow_truncation_attacks` is a field of `Options` here and `zurl-http/h1.zig`
+sets it, unconditionally, for every HTTPS transfer. The reason it gives is
+that HTTP carries its own length, which holds for `Content-Length` and for
+chunked framing and not for the third framing RFC 9112 section 6.3 still
+permits, where the body ends at the end of the stream. For that framing
+`close_notify` is the only thing that tells a whole body from a cut one, and
+this file no longer reports one. The fix belongs in the engine that knows
+the framing, not here.

@@ -1,0 +1,34 @@
+.{
+    .name = .zurl,
+    .version = "0.1.0",
+    .fingerprint = 0x2ef10358390fce78,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .nss = .{
+            .url = "https://github.com/mozilla/nss/archive/refs/tags/NSS_3_111_RTM.tar.gz",
+            .hash = "N-V-__8AAOrhRAuNq4DX5826dHW9i_Wn1habuXPsF2dPQtE9",
+        },
+        // The public suffix list, which decides the domains a cookie may
+        // not be set for. `tools/psl2bin.zig` turns it into the compact
+        // table `lib/zurl-core/psl.zig` embeds.
+        //
+        // The upstream of the list is
+        // <https://publicsuffix.org/list/public_suffix_list.dat>, which is
+        // rewritten as the list changes and therefore has no stable hash.
+        // This names the same file in the project's own repository, at one
+        // commit, so every build reads the same rules.
+        .public_suffix_list = .{
+            .url = "https://github.com/publicsuffix/list/archive/3955e3ec29b94c3cca7bd4509c5f14a7c0959e26.tar.gz",
+            .hash = "N-V-__8AAK5QFgB8WBG1cjzjyUjPnaIjIfW0cIYXHJI2De_x",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "lib",
+        "src",
+        "tools",
+        "LICENSE",
+        "README.md",
+    },
+}
