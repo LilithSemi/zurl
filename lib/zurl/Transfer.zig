@@ -134,13 +134,17 @@ pub const Options = struct {
     /// which is `Authorization` and `Cookie` today, leaves this list before
     /// the request goes out. It reaches the origin the url names, and no
     /// host a redirect points at. curl does the same, and crosses an origin
-    /// only with `--location-trusted`, which zurl does not have yet.
+    /// only with `--location-trusted`, which `location_trusted` below is.
     ///
     /// A header whose name `zurl_http.engine.refused_headers` lists ends
     /// the transfer with `error.WriteError` and a message in
-    /// `Diagnostics`. `Proxy-Authorization` is there because zurl connects
-    /// to no proxy, so that header would only hand a secret to the origin
-    /// server. `Host`, `Content-Length`, `Transfer-Encoding`,
+    /// `Diagnostics`. **`Proxy-Authorization` is there because this build
+    /// writes the proxy credential itself**, from `proxy`, and a copy from
+    /// this list would go out beside it. An earlier comment here said the
+    /// reason was that zurl reached no proxy at all, which stopped being
+    /// true when `zurl_net.proxy` grew `CONNECT` and SOCKS. The refusal is
+    /// unchanged and only the reason for it moved. `Host`,
+    /// `Content-Length`, `Transfer-Encoding`,
     /// `Connection`, and `Expect` are there because the engine writes them
     /// itself: a copy from here goes out beside the engine's own, and two
     /// of either header lets a peer read one request as two.
