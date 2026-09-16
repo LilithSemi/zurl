@@ -21,6 +21,31 @@ pub const download = @import("zurl/download.zig");
 pub const Multi = @import("zurl/Multi.zig");
 pub const Jar = @import("zurl/Jar.zig");
 
+/// Every fault a transfer can report.
+///
+/// **A consumer needs this name to hold what `Client.perform` and
+/// `download.toFile` answer**, because both are written `Error!Result`.
+/// Without it a caller outside this repository has to reach into
+/// `zurl-core` for a name the front package already promises, which is the
+/// one thing the layering rule says it must not do.
+///
+/// Re-exported for the reason `embedded_ca_bundle_pem` and
+/// `ConnectionPool` are: a caller reads the front package alone.
+pub const Error = @import("zurl-core").Error;
+
+/// Where a transfer records what went wrong, and the url, status and
+/// message that go with it.
+///
+/// **A consumer needs this name to make one**, because `Client.perform`
+/// and `download.toFile` both take `?*Diagnostics` and a caller that
+/// cannot write `var d: zurl.Diagnostics = .{}` can only pass null, which
+/// throws away every message this package writes.
+///
+/// `Diagnostics.status` holds the status where the fault carries one. See
+/// `Transfer.Options.fail_on_error`, which turns a `4xx` or `5xx` into
+/// `Error.HttpReturnedError` and records the status beside it.
+pub const Diagnostics = @import("zurl-core").Diagnostics;
+
 /// The trust bundle the build put into this binary, as PEM text.
 ///
 /// This is what `zurl_core.ca.Source.embedded` names, and it is the store

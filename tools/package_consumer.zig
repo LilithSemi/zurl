@@ -70,3 +70,33 @@ test "a consumer reaches the trust roots this build embeds" {
     // see that they are there.
     try std.testing.expect(zurl.embedded_ca_bundle_pem.len > 1024);
 }
+
+test "a consumer names a transfer's fault and its diagnostics through the front package alone" {
+    // **The layering rule is that the CLI, and any consumer, reads the
+    // front package alone.** Every test above this one reaches into
+    // `zurl-core` for `Error` and `Diagnostics`, and that is what the rule
+    // forbids: `download.toFile` is written `Error!Result` and takes a
+    // `?*Diagnostics`, so a consumer that followed the rule had no name
+    // for either and could only pass null, throwing away every message
+    // this package writes.
+    //
+    // This test uses nothing but `zurl`, so it fails to compile if the
+    // re-export goes away.
+    var diagnostics: zurl.Diagnostics = .{};
+    _ = &diagnostics;
+
+    const to_file: *const fn (
+        *zurl.Client,
+        []const u8,
+        std.Io.Dir,
+        []const u8,
+        zurl.Transfer.Options,
+        ?*zurl.Diagnostics,
+    ) zurl.Error!zurl.download.Result = &zurl.download.toFile;
+    try std.testing.expect(@intFromPtr(to_file) != 0);
+
+    // The two names are the ones `zurl-core` holds, and not copies of
+    // them, so an error crossing the boundary compares equal.
+    try std.testing.expect(zurl.Error == zurl_core.Error);
+    try std.testing.expect(zurl.Diagnostics == zurl_core.Diagnostics);
+}
