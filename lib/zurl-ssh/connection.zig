@@ -117,6 +117,18 @@ pub const exec_request = "exec";
 /// The request name that starts a subsystem, RFC 4254 section 6.5.
 pub const subsystem_request = "subsystem";
 
+/// The request name that sets one environment variable, RFC 4254 section
+/// 6.4.
+///
+/// **A server refuses this request more often than it takes it.** OpenSSH
+/// answers it from `AcceptEnv`, which names no variable at all by default,
+/// so the ordinary answer from an unconfigured server is
+/// `SSH_MSG_CHANNEL_FAILURE`. A caller that wants the variable and can go
+/// on without it sends the request with `want_reply` true and reads
+/// `error.ChannelRequestRefused` as "the server said no", which is not the
+/// same as a channel that broke. See `zurl_ssh.Channel.requestEnv`.
+pub const env_request = "env";
+
 /// The request name a server sends with a command's exit status, RFC 4254
 /// section 6.10.
 pub const exit_status_request = "exit-status";
@@ -388,6 +400,33 @@ pub fn writeSubsystem(
     want_reply: bool,
 ) BuildError![]u8 {
     return writeRequest(out, recipient_channel, subsystem_request, want_reply, name);
+}
+
+/// Writes a `SSH_MSG_CHANNEL_REQUEST` that sets one environment variable,
+/// RFC 4254 section 6.4.
+///
+/// **This one carries two strings where every other request here carries
+/// one**, so it cannot go through `writeRequest`. The order is the name and
+/// then the value, and neither is quoted or escaped: the wire format gives
+/// each one its own length, so a value holding a space or an equals sign
+/// needs nothing done to it.
+///
+/// See `env_request` for why a server often refuses this.
+pub fn writeEnv(
+    out: []u8,
+    recipient_channel: u32,
+    name: []const u8,
+    value: []const u8,
+    want_reply: bool,
+) BuildError![]u8 {
+    var w: wire.Writer = .init(out);
+    try w.byte(@intFromEnum(Id.channel_request));
+    try w.uint32(recipient_channel);
+    try w.string(env_request);
+    try w.boolean(want_reply);
+    try w.string(name);
+    try w.string(value);
+    return w.written();
 }
 
 fn writeRequest(
@@ -828,4 +867,48 @@ test "max_control_bytes holds every control message this build sends" {
     _ = try writeGlobalFailure(&storage);
     _ = try writeSubsystem(&storage, 0, "sftp", true);
     _ = try writeOpenFailure(&storage, 0, .administratively_prohibited, "not asked for");
+}
+
+test "an env request carries the name and the value as two strings" {
+    // RFC 4254 section 6.4. **Two strings, where every other request this
+    // file writes carries one**, which is why `writeEnv` does not go
+    // through `writeRequest`.
+    var storage: [128]u8 = undefined;
+    const request = try writeEnv(&storage, 3, "GIT_PROTOCOL", "version=2", true);
+
+    const head = try parseRequestHead(request);
+    try testing.expectEqual(@as(u32, 3), head.recipient_channel);
+    try testing.expectEqualStrings(env_request, head.request);
+    try testing.expect(head.want_reply);
+
+    // The two strings sit behind the head, each with its own length, so
+    // neither needs quoting and an equals sign in the value is just a
+    // character.
+    var rest: wire.Reader = .init(head.rest);
+    try testing.expectEqualStrings("GIT_PROTOCOL", try rest.string());
+    try testing.expectEqualStrings("version=2", try rest.string());
+    try testing.expect(rest.atEnd());
+}
+
+test "an env value holding a space or an equals sign travels as it is" {
+    // A caller that quoted either one would send the quotes. Nothing here
+    // reaches a shell, so nothing here is escaped.
+    var storage: [128]u8 = undefined;
+    const request = try writeEnv(&storage, 0, "A B", "c = d", false);
+
+    const head = try parseRequestHead(request);
+    try testing.expect(!head.want_reply);
+    var rest: wire.Reader = .init(head.rest);
+    try testing.expectEqualStrings("A B", try rest.string());
+    try testing.expectEqualStrings("c = d", try rest.string());
+}
+
+test "an env request refuses a buffer that cannot hold it" {
+    // Recovery is never silent. A buffer one octet short is a named fault
+    // and never a request cut in half.
+    var storage: [16]u8 = undefined;
+    try testing.expectError(
+        error.NoSpaceLeft,
+        writeEnv(&storage, 0, "GIT_PROTOCOL", "version=2", true),
+    );
 }

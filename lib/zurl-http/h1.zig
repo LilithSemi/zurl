@@ -1054,6 +1054,22 @@ pub const Engine = struct {
 
     const vtable: engine.Engine.VTable = .{ .open = open, .cause = causeImpl };
 
+    /// Opens one transfer.
+    ///
+    /// **A request that carries a secret and meets a redirect reaches the
+    /// origin twice, and this is deliberate.** The first request carries
+    /// the secret and gets one answer. When that answer is a redirect the
+    /// caller asked to follow, the whole request goes out again with no
+    /// secret, and the chain is walked with that one. curl behaves the same
+    /// way, and `Exchange.open` holds the reasoning and the measurement.
+    ///
+    /// The note is repeated here because this is the door a caller comes
+    /// through, and because of what it does to a **test fixture**: a server
+    /// scripted with one response per logical request runs out of script on
+    /// the second request and the transfer then waits for an answer that
+    /// never comes. A fixture that meets this needs two responses for one
+    /// credentialed redirect. This cost a consumer a day of reading, so it
+    /// is written where they looked.
     fn open(ptr: *anyopaque, req: engine.Request) engine.OpenError!*engine.Exchange {
         const self: *Engine = @ptrCast(@alignCast(ptr));
         return Exchange.open(self, req);

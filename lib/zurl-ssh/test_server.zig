@@ -430,6 +430,15 @@ upload_storage: [64 * 1024]u8,
 exec_command_storage: [max_exec_command_bytes]u8,
 exec_command_len: usize,
 
+/// Holds the name and the value the last `env` request carried, for the
+/// reason `exec_command_storage` holds the command: a test reads the wire
+/// rather than trust the builder that wrote it. See `envName` and
+/// `envValue`.
+env_name_storage: [max_env_name_bytes]u8,
+env_name_len: usize,
+env_value_storage: [max_env_value_bytes]u8,
+env_value_len: usize,
+
 /// The name of the first fault the fixture's own task hit, or null.
 ///
 /// **A fixture that fails silently makes a client look broken.** A test
@@ -481,6 +490,8 @@ pub fn start(s: *Server, script: Script) !void {
     s.sftp_len = 0;
     s.sftp_at = 0;
     s.exec_command_len = 0;
+    s.env_name_len = 0;
+    s.env_value_len = 0;
     s.failure = null;
     s.finished = .init(false);
     s.accept_count = .init(0);
@@ -537,6 +548,16 @@ pub fn uploaded(s: *const Server) []const u8 {
 /// request arrived.
 pub fn execCommand(s: *const Server) []const u8 {
     return s.exec_command_storage[0..s.exec_command_len];
+}
+
+/// The name the last `env` request carried, or empty when none arrived.
+pub fn envName(s: *const Server) []const u8 {
+    return s.env_name_storage[0..s.env_name_len];
+}
+
+/// The value the last `env` request carried, or empty when none arrived.
+pub fn envValue(s: *const Server) []const u8 {
+    return s.env_value_storage[0..s.env_value_len];
 }
 
 /// A verifier that trusts this fixture's own host key and nothing else.
@@ -1181,34 +1202,67 @@ fn runConnection(s: *Server, script: ConnectionScript) !void {
     // the grammar of the two is the same past the name.
     // The client's refusal of the channel this side offered arrives here,
     // for the reason the open above records.
-    const request_payload = try s.awaitConnection(.channel_request);
-    const head = try connection.parseRequestHead(request_payload);
-    if (head.recipient_channel != fixture_channel) return error.FixtureWrongChannel;
-    const wanted = std.mem.eql(u8, head.request, script.accept_request);
+    // **A real server refuses the requests it does not take and reads the
+    // next one.** OpenSSH answers an `env` request from `AcceptEnv`, which
+    // names nothing by default, and then runs the `exec` that follows it.
+    // So this reads requests until one matches `accept_request`, and a name
+    // that does not match gets `SSH_MSG_CHANNEL_FAILURE` and no more.
+    //
+    // `refuse_request` is the other shape: that one refuses whatever
+    // arrives and stops, which is the server that will not do the thing at
+    // all.
+    var requests_read: usize = 0;
+    while (true) {
+        if (requests_read >= max_channel_requests) return error.FixtureTooManyRequests;
+        requests_read += 1;
 
-    // **The command an `exec` request carried is kept, byte for byte.** A
-    // quoting rule is worth only what the wire says, so a test compares
-    // these bytes rather than trust the builder that wrote them.
-    if (std.mem.eql(u8, head.request, connection.exec_request)) {
-        var command_reader: wire.Reader = .init(head.rest);
-        const command = try command_reader.string();
-        if (command.len > s.exec_command_storage.len) return error.FixtureExecCommandTooLong;
-        @memcpy(s.exec_command_storage[0..command.len], command);
-        s.exec_command_len = command.len;
-    }
+        const request_payload = try s.awaitConnection(.channel_request);
+        const head = try connection.parseRequestHead(request_payload);
+        if (head.recipient_channel != fixture_channel) return error.FixtureWrongChannel;
+        const wanted = std.mem.eql(u8, head.request, script.accept_request);
 
-    if (head.want_reply) {
-        const id: connection.Id = if (script.refuse_request or !wanted)
-            .channel_failure
-        else
-            .channel_success;
-        var reply_storage: [16]u8 = undefined;
-        var reply: wire.Writer = .init(&reply_storage);
-        try reply.byte(@intFromEnum(id));
-        try reply.uint32(s.client_channel);
-        try s.sendPacket(reply.written());
+        // **The command an `exec` request carried is kept, byte for byte.**
+        // A quoting rule is worth only what the wire says, so a test
+        // compares these bytes rather than trust the builder that wrote
+        // them.
+        if (std.mem.eql(u8, head.request, connection.exec_request)) {
+            var command_reader: wire.Reader = .init(head.rest);
+            const command = try command_reader.string();
+            if (command.len > s.exec_command_storage.len) return error.FixtureExecCommandTooLong;
+            @memcpy(s.exec_command_storage[0..command.len], command);
+            s.exec_command_len = command.len;
+        }
+
+        // **The name and the value an `env` request carried are kept too**,
+        // and for the same reason: a test that trusted the builder would
+        // pass on a builder that wrote the two strings the wrong way round.
+        if (std.mem.eql(u8, head.request, connection.env_request)) {
+            var env_reader: wire.Reader = .init(head.rest);
+            const name = try env_reader.string();
+            const value = try env_reader.string();
+            if (name.len > s.env_name_storage.len) return error.FixtureEnvNameTooLong;
+            if (value.len > s.env_value_storage.len) return error.FixtureEnvValueTooLong;
+            @memcpy(s.env_name_storage[0..name.len], name);
+            s.env_name_len = name.len;
+            @memcpy(s.env_value_storage[0..value.len], value);
+            s.env_value_len = value.len;
+        }
+
+        if (head.want_reply) {
+            const id: connection.Id = if (script.refuse_request or !wanted)
+                .channel_failure
+            else
+                .channel_success;
+            var reply_storage: [16]u8 = undefined;
+            var reply: wire.Writer = .init(&reply_storage);
+            try reply.byte(@intFromEnum(id));
+            try reply.uint32(s.client_channel);
+            try s.sendPacket(reply.written());
+        }
+
+        if (script.refuse_request) return;
+        if (wanted) break;
     }
-    if (script.refuse_request or !wanted) return;
 
     if (script.stray_request) try s.sendStrayRequests(1);
 
@@ -1333,6 +1387,20 @@ fn sinkBody(s: *Server) !void {
 /// test that compared a truncated copy would fail as a fixture fault rather
 /// than pass on half the bytes.
 pub const max_exec_command_bytes: usize = 8 * 1024;
+
+/// How many channel requests the fixture reads before it gives up.
+///
+/// **A server that refuses a request reads the next one**, so this loop
+/// has to turn more than once and therefore has to stop. A real client
+/// sends one or two: an `env` the server may refuse, and the `exec` that
+/// follows it. Eight is far above that and still ends a test that would
+/// otherwise wait for a request nobody sends.
+pub const max_channel_requests: usize = 8;
+
+/// The largest `env` name and value this fixture keeps. `GIT_PROTOCOL` and
+/// `version=2` are the ones a real client sends, and both are tiny.
+pub const max_env_name_bytes: usize = 256;
+pub const max_env_value_bytes: usize = 1024;
 
 /// Stages channel bytes for the rcp service.
 ///

@@ -495,3 +495,68 @@ test "a message that carries data is not counted against the no-progress budget"
 
     try f.channel.close();
 }
+
+test "an env request the server takes is sent before the command" {
+    // RFC 4254 section 6.4. Git asks for wire protocol version 2 this way
+    // and has no other way to ask for it over SSH.
+    var f = try Fixture.start(.{ .accept_request = "env" }, .{});
+    defer f.stop();
+
+    try f.run();
+    var buffer: [256]u8 = undefined;
+    try f.channel.requestEnv(&buffer, "GIT_PROTOCOL", "version=2");
+
+    // **Read off the wire and not out of the builder.** A builder that
+    // wrote the two strings the wrong way round would pass a test that
+    // only asked whether the call returned.
+    try testing.expectEqualStrings("GIT_PROTOCOL", f.server.envName());
+    try testing.expectEqualStrings("version=2", f.server.envValue());
+}
+
+test "a refused env request leaves the channel usable for the command" {
+    // **This is the case a caller meets on a real server.** OpenSSH answers
+    // an `env` request from `AcceptEnv`, which names nothing by default, so
+    // the ordinary answer is `SSH_MSG_CHANNEL_FAILURE`. A client that read
+    // that as a broken channel could never run the command at all.
+    //
+    // The refusal has its own name, and the exec after it still runs on the
+    // same channel, which is what lets a caller fall back to an older
+    // protocol rather than fail the connection.
+    var f = try Fixture.start(.{
+        .accept_request = "exec",
+        .service = .write_body,
+        .body = "C0644 5 f.txt\n",
+        .exit_status = 0,
+    }, .{});
+    defer f.stop();
+
+    try f.run();
+    var buffer: [256]u8 = undefined;
+
+    try testing.expectError(
+        error.ChannelRequestRefused,
+        f.channel.requestEnv(&buffer, "GIT_PROTOCOL", "version=2"),
+    );
+
+    // The channel is untouched: the command runs and the body arrives.
+    try f.channel.requestExec(&buffer, "git-upload-pack '/srv/repo.git'");
+    const body = try f.readAll();
+    defer testing.allocator.free(body);
+    try testing.expectEqualStrings("C0644 5 f.txt\n", body);
+    try f.channel.close();
+    try testing.expectEqual(@as(?u32, 0), f.channel.exitStatus());
+}
+
+test "an env request before the channel opens is refused by state and not sent" {
+    // The order RFC 4254 section 6.4 asks for is open, then environment,
+    // then the command. A request built before the open would name a
+    // channel the peer has not confirmed.
+    var f = try Fixture.start(.{ .accept_request = "env" }, .{});
+    defer f.stop();
+
+    var buffer: [256]u8 = undefined;
+    try testing.expectError(
+        error.ChannelStateInvalid,
+        f.channel.requestEnv(&buffer, "GIT_PROTOCOL", "version=2"),
+    );
+}

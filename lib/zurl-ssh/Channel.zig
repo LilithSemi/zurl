@@ -582,6 +582,52 @@ pub fn requestSubsystem(c: *Channel, name: []const u8) Error!void {
     return c.awaitRequestReply();
 }
 
+/// Sends an `env` request and waits for the answer.
+///
+/// **A server that refuses this is the ordinary case, not a fault.**
+/// OpenSSH answers an `env` request from its `AcceptEnv` list, and that
+/// list names no variable by default, so an unconfigured server says
+/// `SSH_MSG_CHANNEL_FAILURE`. This answers that with
+/// `error.ChannelRequestRefused`, which is its own name and not the name a
+/// broken channel gets. A caller that can go on without the variable
+/// catches that one error and carries on:
+///
+///     c.requestEnv(&buf, "GIT_PROTOCOL", "version=2") catch |err| switch (err) {
+///         error.ChannelRequestRefused => {},  // the server said no
+///         else => return err,
+///     };
+///
+/// **Send this after `open` and before `requestExec`.** RFC 4254 section
+/// 6.4 puts the environment before the command, and a variable that
+/// arrives after the command has started reaches nothing.
+///
+/// Neither `name` nor `value` is quoted or escaped. The wire format gives
+/// each one its own length, so a value holding a space or an equals sign
+/// travels as it is. Neither reaches a shell: a server reads them into the
+/// command's environment, not into a command line.
+///
+/// `buffer` holds the request while it is built, the way `requestExec`
+/// takes one. It must be at least `name.len + value.len +
+/// connection.max_control_bytes`, because the two strings together can be
+/// longer than a control message and this value's own buffer is not.
+pub fn requestEnv(
+    c: *Channel,
+    buffer: []u8,
+    name: []const u8,
+    value: []const u8,
+) Error!void {
+    if (!c.opened) return error.ChannelStateInvalid;
+    const request = try connection.writeEnv(
+        buffer,
+        c.remote_channel,
+        name,
+        value,
+        true,
+    );
+    try c.transport.send(request);
+    return c.awaitRequestReply();
+}
+
 /// Sends an `exec` request and waits for the answer.
 ///
 /// **`command` reaches a shell on the far side**, so whoever built it owns
