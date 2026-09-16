@@ -4405,27 +4405,21 @@ fn envPath(env: *std.process.Environ.Map, name: []const u8) ?[]const u8 {
     return if (value.len == 0) null else value;
 }
 
-/// The first of `names` that `env` sets to a non-empty value, or null.
-///
-/// The lists in `zurl_core.proxy.Env` put the lower case spelling first,
-/// because curl prefers it where both are set. Measured against curl
-/// 8.21.0 with both cases pointing at two different ports.
-fn envFirst(env: *std.process.Environ.Map, names: []const []const u8) ?[]const u8 {
-    for (names) |name| {
-        if (envPath(env, name)) |value| return value;
-    }
-    return null;
-}
-
 /// Fills `options.proxy`, `options.proxy_tls`, and `options.no_proxy` from
 /// the flags and the environment.
 ///
-/// **The flags outrank the environment, and each of the two proxy fields is
-/// answered on its own.** curl reads `http_proxy` for a cleartext target and
-/// `https_proxy` for a TLS one, with `all_proxy` behind both, so a shell
-/// that sets one and not the other still reaches the origin directly for the
-/// other scheme. `zurl_core.proxy.Env` names the variables and holds the
-/// measurement, `HTTP_PROXY` being deliberately absent.
+/// **The flags outrank the environment, and this function holds no rule of
+/// the environment's own.** `zurl_core.proxy.fromEnv` reads the variables,
+/// and `zurl.proxyFromEnv` is the same rule for a caller of the library, so
+/// a program that moves off curl gets what curl gave it. A copy of the
+/// order here would be a second rule, and two copies of one rule go apart.
+///
+/// Each of the two proxy fields is answered on its own: curl reads
+/// `http_proxy` for a cleartext target and `https_proxy` for a TLS one,
+/// with `all_proxy` behind both, so a shell that sets one and not the other
+/// still reaches the origin directly for the other scheme.
+/// `zurl_core.proxy.Env` names the variables and holds the measurement,
+/// `HTTP_PROXY` being deliberately absent.
 ///
 /// **`-x ""` turns proxying off, the environment included.** Measured
 /// against curl 8.21.0: with `http_proxy` set, `-x ""` sent the request
@@ -4444,8 +4438,7 @@ fn resolveProxy(
     env: *std.process.Environ.Map,
     fault: ?*Fault,
 ) (ParseError || Allocator.Error)!void {
-    b.options.no_proxy = b.noproxy_arg orelse
-        envFirst(env, &zurl_core.proxy.Env.no) orelse "";
+    b.options.no_proxy = b.noproxy_arg orelse zurl_core.proxy.noProxyFromEnv(env);
 
     if (b.proxy_arg) |text| {
         // `-x ""` says no proxy at all, and it says it louder than any
@@ -4461,17 +4454,14 @@ fn resolveProxy(
         return;
     }
 
-    // No flag, so the environment answers, one scheme at a time.
-    const fallback = envFirst(env, &zurl_core.proxy.Env.all);
-    // `all_proxy` covers every scheme the way `-x` does, and
-    // `http_proxy` and `https_proxy` each answer for one HTTP target.
-    if (fallback != null) b.options.proxy_every_protocol = true;
-    if (envFirst(env, &zurl_core.proxy.Env.http) orelse fallback) |text| {
-        b.options.proxy = try parseProxyArg(text, null, b.arena, fault);
-    }
-    if (envFirst(env, &zurl_core.proxy.Env.https) orelse fallback) |text| {
-        b.options.proxy_tls = try parseProxyArg(text, null, b.arena, fault);
-    }
+    // No flag, so the environment answers. The variables are read only
+    // here, after `-x` has had its turn, so a bad `http_proxy` beside a
+    // good `-x` stops nothing: the flag already said which proxy to use.
+    const from_env = zurl_core.proxy.fromEnv(env) catch |err|
+        return proxyFault(b.arena, fault, err);
+    b.options.proxy = from_env.http;
+    b.options.proxy_tls = from_env.https;
+    if (from_env.every_protocol) b.options.proxy_every_protocol = true;
 }
 
 /// Reads one proxy url, and names the flag in `fault` when it does not
@@ -4486,11 +4476,21 @@ fn parseProxyArg(
         zurl_core.proxy.parseAs(text, k)
     else
         zurl_core.proxy.parse(text);
-    return parsed catch |err| switch (err) {
-        // **The sentence quotes nothing.** A proxy url can carry a
-        // credential, and a message is printed, logged, and pasted into a
-        // bug report. So it names the fault and the flag family, and never
-        // the text.
+    return parsed catch |err| proxyFault(arena, fault, err);
+}
+
+/// Names a proxy url that did not read, whether it came from a flag or from
+/// the environment.
+///
+/// **The sentence quotes nothing.** A proxy url can carry a credential, and
+/// a message is printed, logged, and pasted into a bug report. So it names
+/// the fault and never the text.
+fn proxyFault(
+    arena: Allocator,
+    fault: ?*Fault,
+    err: zurl_core.proxy.ParseError,
+) (ParseError || Allocator.Error) {
+    return switch (err) {
         error.UnsupportedProxyScheme => fail(
             arena,
             fault,

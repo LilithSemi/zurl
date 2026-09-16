@@ -489,8 +489,13 @@ fn prefixEqual(a: []const u8, b: []const u8, bits: u8) bool {
 /// took effect. Where both cases of one name are set, the lower case one
 /// wins.
 pub const Env = struct {
-    /// The variable naming the proxy for a cleartext target. The upper case
-    /// spelling has no entry, for the reason above.
+    /// The variable naming the proxy for a cleartext target.
+    ///
+    /// **One entry, and that is a security rule and not an oversight.** A
+    /// CGI program takes the client's `Proxy:` request header as
+    /// `HTTP_PROXY` in its own environment, so an entry for the upper case
+    /// spelling lets whoever sent the request choose the proxy. Do not add
+    /// one. The full history is above.
     pub const http = [_][]const u8{"http_proxy"};
     /// The variable naming the proxy for a TLS target.
     pub const https = [_][]const u8{ "https_proxy", "HTTPS_PROXY" };
@@ -501,7 +506,111 @@ pub const Env = struct {
     pub const no = [_][]const u8{ "no_proxy", "NO_PROXY" };
 };
 
+/// What the proxy environment variables say, after every one of them is
+/// read.
+///
+/// Each field answers for one field of a transfer's options, and a field
+/// the environment did not name keeps the value here that the options give
+/// it. `zurl.proxyFromEnv` does that copy for a caller of the front
+/// package.
+pub const FromEnv = struct {
+    /// The proxy a cleartext target goes through. This comes from
+    /// `http_proxy`, and from `all_proxy` when `http_proxy` names none.
+    http: ?Spec = null,
+    /// The proxy a TLS target goes through. This comes from `https_proxy`
+    /// or `HTTPS_PROXY`, and from `all_proxy` when neither names one.
+    https: ?Spec = null,
+    /// The hosts that reach no proxy. This comes from `no_proxy` or
+    /// `NO_PROXY`, and it is empty when neither names one. An empty list
+    /// excludes no host, which is what `bypasses` answers for it.
+    no_proxy: []const u8 = "",
+    /// Whether `all_proxy` named the proxy.
+    ///
+    /// `all_proxy` covers every protocol the way `-x` does, so a protocol
+    /// that carries no proxy must refuse rather than dial direct.
+    /// `http_proxy` and `https_proxy` each answer for one HTTP target
+    /// alone, so neither of them sets this.
+    every_protocol: bool = false,
+};
+
+/// Reads the proxy environment variables into one answer.
+///
+/// **This is the environment half of the rule and nothing more.** A flag
+/// that outranks the environment is the caller's business. The CLI puts
+/// `-x`, the `--socks` family, and `--noproxy` over what this answers, and
+/// a library caller does the same with whatever its own user wrote.
+///
+/// The order, every part of it measured against curl 8.21.0 by reading the
+/// address curl dialed:
+///
+/// - **A variable set to the empty text counts as unset.** An empty value
+///   names no proxy, so the next name in the list answers, and the next
+///   variable after that.
+/// - **Where both cases of one name are set, the lower case one wins.**
+///   Measured with the two cases pointing at two different ports.
+/// - `all_proxy` sits behind `http_proxy` and behind `https_proxy`, one
+///   scheme at a time. A shell that sets one and not the other still
+///   reaches the origin directly for the other scheme.
+/// - `HTTP_PROXY` is not read at all. `Env` holds the reason, and it is a
+///   security rule and not an oversight.
+///
+/// **A proxy url that does not read is a fault the caller sees, and never a
+/// quiet fall back to a direct connection.** A stale shell profile must not
+/// become an unreported direct connection to the origin.
+///
+/// Only a value that answers is read. `all_proxy` beside an `http_proxy`
+/// and an `https_proxy` reaches no `parse` call, so a bad `all_proxy` that
+/// nothing uses stops nothing. It still sets `every_protocol`, because the
+/// user did name a proxy for every protocol.
+pub fn fromEnv(env: *const std.process.Environ.Map) ParseError!FromEnv {
+    var out: FromEnv = .{ .no_proxy = noProxyFromEnv(env) };
+
+    const fallback = firstSet(env, &Env.all);
+    out.every_protocol = fallback != null;
+    if (firstSet(env, &Env.http) orelse fallback) |text| out.http = try parse(text);
+    if (firstSet(env, &Env.https) orelse fallback) |text| out.https = try parse(text);
+    return out;
+}
+
+/// The hosts that reach no proxy, from the environment alone.
+///
+/// `fromEnv` answers this too, in `FromEnv.no_proxy`. It is a function of
+/// its own because it is the one part of the rule a caller can want by
+/// itself: `--noproxy` and `-x` are two different flags, so a command line
+/// that names a proxy still takes its bypass list from the environment.
+pub fn noProxyFromEnv(env: *const std.process.Environ.Map) []const u8 {
+    return firstSet(env, &Env.no) orelse "";
+}
+
+/// The value of the first name in `names` that is set to a non-empty text,
+/// or null when no name is.
+///
+/// **An empty value counts as unset, and that is curl's own rule.** A
+/// variable set to the empty text names no proxy and no bypass list, so
+/// reading it as the text `""` would send an empty host to a dial. The
+/// lists in `Env` put the lower case spelling first, because the first name
+/// that answers wins and curl prefers the lower case one.
+fn firstSet(env: *const std.process.Environ.Map, names: []const []const u8) ?[]const u8 {
+    for (names) |name| {
+        const value = env.get(name) orelse continue;
+        if (value.len != 0) return value;
+    }
+    return null;
+}
+
 const testing = std.testing;
+
+/// An environment map holding the names one test lists, and nothing else.
+///
+/// The caller must `deinit` it. A test that read the real environment would
+/// answer one way on a developer's machine and another way in a build, so
+/// no test here reads one.
+fn testEnv(pairs: []const [2][]const u8) !std.process.Environ.Map {
+    var map: std.process.Environ.Map = .init(testing.allocator);
+    errdefer map.deinit();
+    for (pairs) |pair| try map.put(pair[0], pair[1]);
+    return map;
+}
 
 test "a proxy url with no scheme is an http proxy" {
     // Measured against curl 8.21.0: `-x 127.0.0.1:PORT` and `-x
@@ -870,4 +979,196 @@ test "a host at the host name bound reads" {
         error.InvalidProxy,
         parse(buffer[0 .. prefix.len + std.Io.net.HostName.max_len + 1]),
     );
+}
+
+test "an empty environment names no proxy and excludes no host" {
+    var env = try testEnv(&.{});
+    defer env.deinit();
+
+    const from_env = try fromEnv(&env);
+    try testing.expectEqual(@as(?Spec, null), from_env.http);
+    try testing.expectEqual(@as(?Spec, null), from_env.https);
+    try testing.expectEqualStrings("", from_env.no_proxy);
+    try testing.expect(!from_env.every_protocol);
+    try testing.expectEqualStrings("", noProxyFromEnv(&env));
+}
+
+test "each scheme takes the variable of its own" {
+    // curl reads `http_proxy` for a cleartext target and `https_proxy` for
+    // a TLS one, so a shell that sets one and not the other still reaches
+    // the origin directly for the other scheme.
+    var env = try testEnv(&.{
+        .{ "http_proxy", "http://127.0.0.1:3128" },
+        .{ "https_proxy", "http://127.0.0.2:3129" },
+    });
+    defer env.deinit();
+
+    const from_env = try fromEnv(&env);
+    try testing.expectEqualStrings("127.0.0.1", from_env.http.?.host);
+    try testing.expectEqualStrings("127.0.0.2", from_env.https.?.host);
+    // Neither of the two covers a protocol that is not HTTP.
+    try testing.expect(!from_env.every_protocol);
+
+    // And one variable alone leaves the other scheme direct.
+    var one = try testEnv(&.{.{ "http_proxy", "http://127.0.0.1:3128" }});
+    defer one.deinit();
+    const only_cleartext = try fromEnv(&one);
+    try testing.expectEqualStrings("127.0.0.1", only_cleartext.http.?.host);
+    try testing.expectEqual(@as(?Spec, null), only_cleartext.https);
+}
+
+test "a variable set to the empty text counts as unset" {
+    // **Measured against curl 8.21.0: an empty `http_proxy` left the
+    // transfer direct.** An empty value names no host, so reading it as the
+    // text `""` would send an empty host to a dial.
+    var env = try testEnv(&.{
+        .{ "http_proxy", "" },
+        .{ "https_proxy", "" },
+        .{ "all_proxy", "" },
+        .{ "no_proxy", "" },
+    });
+    defer env.deinit();
+
+    const from_env = try fromEnv(&env);
+    try testing.expectEqual(@as(?Spec, null), from_env.http);
+    try testing.expectEqual(@as(?Spec, null), from_env.https);
+    try testing.expectEqualStrings("", from_env.no_proxy);
+    try testing.expect(!from_env.every_protocol);
+
+    // An empty value does not stop the next name in the list either.
+    var mixed = try testEnv(&.{
+        .{ "https_proxy", "" },
+        .{ "HTTPS_PROXY", "http://127.0.0.2:3129" },
+        .{ "no_proxy", "" },
+        .{ "NO_PROXY", "example.com" },
+    });
+    defer mixed.deinit();
+    const answered = try fromEnv(&mixed);
+    try testing.expectEqualStrings("127.0.0.2", answered.https.?.host);
+    try testing.expectEqualStrings("example.com", answered.no_proxy);
+}
+
+test "the lower case spelling wins where both cases are set" {
+    // Measured against curl 8.21.0 with the two cases pointing at two
+    // different ports: the lower case one decided.
+    var env = try testEnv(&.{
+        .{ "https_proxy", "http://127.0.0.1:3128" },
+        .{ "HTTPS_PROXY", "http://127.0.0.2:3129" },
+        .{ "all_proxy", "http://127.0.0.3:3130" },
+        .{ "ALL_PROXY", "http://127.0.0.4:3131" },
+        .{ "no_proxy", "lower.test" },
+        .{ "NO_PROXY", "upper.test" },
+    });
+    defer env.deinit();
+
+    const from_env = try fromEnv(&env);
+    try testing.expectEqualStrings("127.0.0.1", from_env.https.?.host);
+    // `all_proxy` answers for the cleartext scheme here, and the lower case
+    // spelling of it wins the same way.
+    try testing.expectEqualStrings("127.0.0.3", from_env.http.?.host);
+    try testing.expectEqualStrings("lower.test", from_env.no_proxy);
+}
+
+test "HTTP_PROXY is not read, and every other upper case name is" {
+    // **This is a security rule and not an oversight.** A CGI program takes
+    // the client's `Proxy:` request header as `HTTP_PROXY` in its own
+    // environment, so reading it would let whoever sent the request choose
+    // the proxy of every cleartext transfer. Measured against curl 8.21.0,
+    // one invocation for each name.
+    var upper = try testEnv(&.{.{ "HTTP_PROXY", "http://127.0.0.1:3128" }});
+    defer upper.deinit();
+    const ignored = try fromEnv(&upper);
+    try testing.expectEqual(@as(?Spec, null), ignored.http);
+    try testing.expectEqual(@as(?Spec, null), ignored.https);
+
+    var lower = try testEnv(&.{.{ "http_proxy", "http://127.0.0.1:3128" }});
+    defer lower.deinit();
+    try testing.expectEqualStrings("127.0.0.1", (try fromEnv(&lower)).http.?.host);
+
+    // A bad value in `HTTP_PROXY` stops nothing either, because nothing
+    // reads it.
+    var bad = try testEnv(&.{.{ "HTTP_PROXY", "ftp://127.0.0.1" }});
+    defer bad.deinit();
+    try testing.expectEqual(@as(?Spec, null), (try fromEnv(&bad)).http);
+}
+
+test "all_proxy sits behind each scheme and covers every protocol" {
+    // Measured against curl 8.21.0 with both set: the scheme's own variable
+    // won, and the scheme with no variable of its own took `all_proxy`.
+    var env = try testEnv(&.{
+        .{ "all_proxy", "http://127.0.0.3:3130" },
+        .{ "http_proxy", "http://127.0.0.1:3128" },
+    });
+    defer env.deinit();
+
+    const from_env = try fromEnv(&env);
+    try testing.expectEqualStrings("127.0.0.1", from_env.http.?.host);
+    try testing.expectEqualStrings("127.0.0.3", from_env.https.?.host);
+    // `all_proxy` covers every protocol the way `-x` does, and it does so
+    // even where a scheme's own variable outranks it for HTTP.
+    try testing.expect(from_env.every_protocol);
+
+    // Alone, it answers for both schemes.
+    var only = try testEnv(&.{.{ "ALL_PROXY", "socks5h://127.0.0.3:1080" }});
+    defer only.deinit();
+    const both = try fromEnv(&only);
+    try testing.expectEqual(Kind.socks5h, both.http.?.kind);
+    try testing.expectEqual(Kind.socks5h, both.https.?.kind);
+    try testing.expect(both.every_protocol);
+}
+
+test "a proxy url in the environment that does not read is a fault" {
+    // **A stale shell profile must not become a direct connection that
+    // nobody reports.** The caller sees the fault and stops, the way the
+    // CLI does with exit 5 and exit 7.
+    var scheme = try testEnv(&.{.{ "http_proxy", "ftp://127.0.0.1" }});
+    defer scheme.deinit();
+    try testing.expectError(error.UnsupportedProxyScheme, fromEnv(&scheme));
+
+    var port = try testEnv(&.{.{ "https_proxy", "http://127.0.0.1:notaport" }});
+    defer port.deinit();
+    try testing.expectError(error.InvalidProxy, fromEnv(&port));
+
+    var fallback = try testEnv(&.{.{ "all_proxy", "http://127.0.0.1:0" }});
+    defer fallback.deinit();
+    try testing.expectError(error.InvalidProxy, fromEnv(&fallback));
+
+    // A value that answers for no scheme reaches no `parse` call, so it
+    // stops nothing. This is what the CLI did before this function held the
+    // rule, and the behaviour is kept.
+    var unused = try testEnv(&.{
+        .{ "all_proxy", "ftp://127.0.0.1" },
+        .{ "http_proxy", "http://127.0.0.1:3128" },
+        .{ "https_proxy", "http://127.0.0.2:3129" },
+    });
+    defer unused.deinit();
+    const read = try fromEnv(&unused);
+    try testing.expectEqualStrings("127.0.0.1", read.http.?.host);
+    try testing.expect(read.every_protocol);
+}
+
+test "the bypass list reads from either case and is answered on its own" {
+    var env = try testEnv(&.{.{ "NO_PROXY", "example.com, .test" }});
+    defer env.deinit();
+
+    try testing.expectEqualStrings("example.com, .test", noProxyFromEnv(&env));
+    try testing.expectEqualStrings("example.com, .test", (try fromEnv(&env)).no_proxy);
+    // And the list it names is the one `bypasses` reads.
+    try testing.expect(bypasses(noProxyFromEnv(&env), "sub.example.com"));
+    try testing.expect(!bypasses(noProxyFromEnv(&env), "other.invalid"));
+}
+
+test "the bypass list answers even where a proxy url does not read" {
+    // `--noproxy` and `-x` are two different flags, so a caller that puts
+    // its own proxy over the environment still wants this list. It must not
+    // need `fromEnv`, which faults on a proxy url the caller was going to
+    // replace.
+    var env = try testEnv(&.{
+        .{ "no_proxy", "example.com" },
+        .{ "http_proxy", "ftp://127.0.0.1" },
+    });
+    defer env.deinit();
+
+    try testing.expectEqualStrings("example.com", noProxyFromEnv(&env));
+    try testing.expectError(error.UnsupportedProxyScheme, fromEnv(&env));
 }

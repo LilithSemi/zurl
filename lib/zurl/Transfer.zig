@@ -411,6 +411,13 @@ pub const Options = struct {
     /// Null dials the origin, which is what every transfer did before this
     /// field existed. `zurl_core.proxy.parse` builds the value, and it
     /// borrows from the url text, which must outlive the transfer.
+    ///
+    /// **No transfer reads an environment variable of its own.** libcurl
+    /// read `http_proxy` and its family inside the library, so a caller
+    /// that replaces a curl call must call `zurl.proxyFromEnv`, which
+    /// fills this field, `proxy_tls`, `proxy_every_protocol`, and
+    /// `no_proxy` from them. Without that call every target is dialled
+    /// directly and nothing says so.
     proxy: ?ProxySpec = null,
     /// The proxy a TLS target goes through. This is `-x` and the
     /// `https_proxy` environment variable.

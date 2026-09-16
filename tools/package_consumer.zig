@@ -100,3 +100,47 @@ test "a consumer names a transfer's fault and its diagnostics through the front 
     try std.testing.expect(zurl.Error == zurl_core.Error);
     try std.testing.expect(zurl.Diagnostics == zurl_core.Diagnostics);
 }
+
+test "a consumer fills a transfer's proxy from the environment through the front package alone" {
+    // **libcurl read `http_proxy`, `https_proxy`, `all_proxy`, and
+    // `no_proxy` itself.** A program that moves off curl and onto
+    // `download.toFile` loses every one of them at once, reaches each
+    // origin directly, and gets no diagnostic for it. So the front package
+    // has to answer the whole rule, and a consumer must not have to copy
+    // it.
+    //
+    // This test uses nothing but `zurl`, so it fails to compile if the
+    // helper or the names behind it go away.
+    var env: std.process.Environ.Map = .init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("http_proxy", "http://127.0.0.1:3128");
+    try env.put("all_proxy", "socks5h://127.0.0.2:1080");
+    try env.put("no_proxy", "example.com");
+
+    var options: zurl.Transfer.Options = .{};
+    try zurl.proxyFromEnv(&options, &env);
+
+    try std.testing.expectEqualStrings("127.0.0.1", options.proxy.?.host);
+    try std.testing.expectEqual(@as(u16, 3128), options.proxy.?.port);
+    // `all_proxy` answers for the scheme that named no variable of its own,
+    // and it covers every protocol the way `-x` does.
+    try std.testing.expectEqualStrings("127.0.0.2", options.proxy_tls.?.host);
+    try std.testing.expect(options.proxy_every_protocol);
+    try std.testing.expectEqualStrings("example.com", options.no_proxy);
+
+    // And the parts of the rule, for a consumer that writes a variant of
+    // its own: the spec type, the parser, the variable names, and the
+    // bypass rule.
+    const spec: zurl.Transfer.ProxySpec = try zurl.proxy_rules.parse("http://127.0.0.9:9");
+    try std.testing.expectEqual(@as(u16, 9), spec.port);
+    try std.testing.expectEqualStrings("http_proxy", zurl.proxy_rules.Env.http[0]);
+    try std.testing.expect(zurl.proxy_rules.bypasses(options.no_proxy, "sub.example.com"));
+
+    // A proxy url that does not read is a fault the consumer sees, and
+    // never a quiet direct connection.
+    try env.put("http_proxy", "ftp://127.0.0.1");
+    try std.testing.expectError(
+        error.UnsupportedProxyScheme,
+        zurl.proxyFromEnv(&options, &env),
+    );
+}
