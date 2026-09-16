@@ -134,8 +134,17 @@ pub const proxy_rules = @import("zurl-core").proxy;
 /// flag borrows from `argv`, so `env` must outlive `options`.
 ///
 /// A proxy url that does not read is a fault the caller sees, and never a
-/// quiet direct connection. `zurl_core.errors.curlCode` gives the two
-/// members the exit codes curl answers with, which are 5 and 7.
+/// quiet direct connection.
+///
+/// **The two faults are not members of `Error`, so `errors.curlCode` does
+/// not take them.** `proxy_rules.ParseError` is its own set, and a caller
+/// that wants curl's exit codes maps them itself. curl 8.21.0 answers
+/// `-x notascheme://h` with 7 and `-x http://h:notaport` with 5, measured,
+/// and `src/main.zig` gives them those numbers by asking
+/// `errors.curlCode` for `CouldNotConnect` and `CouldNotResolveProxy`:
+///
+///     error.UnsupportedProxyScheme => 7
+///     error.InvalidProxy           => 5
 pub fn proxyFromEnv(
     options: *Transfer.Options,
     env: *const std.process.Environ.Map,
