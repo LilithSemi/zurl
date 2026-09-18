@@ -39,6 +39,11 @@
 /// Opening a stream to a peer, with a bound on how long that may take.
 pub const tcp = @import("zurl-net/tcp.zig");
 
+/// Opening a stream to a unix domain socket on this machine. There is no
+/// name lookup and no second address, so it shares nothing with `tcp` but
+/// the `std.Io.net.Stream` it hands back.
+pub const unix = @import("zurl-net/unix.zig");
+
 /// The check over `/etc/resolv.conf` that runs before a name lookup.
 /// `tcp.dial` is its only caller. It is here, and not private to `tcp`,
 /// so its grammar can be read next to the grammar of `std`.
@@ -80,6 +85,7 @@ pub const sasl = @import("zurl-net/sasl.zig");
 
 test {
     _ = tcp;
+    _ = unix;
     _ = resolv;
     _ = override;
     _ = Connection;

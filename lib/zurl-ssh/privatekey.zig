@@ -55,7 +55,11 @@
 
 const std = @import("std");
 
+const signer_seam = @import("signer.zig");
 const wire = @import("wire.zig");
+
+const Signer = signer_seam.Signer;
+const SignerError = signer_seam.Error;
 
 const Aes256 = std.crypto.core.aes.Aes256;
 const Allocator = std.mem.Allocator;
@@ -350,6 +354,20 @@ pub const PrivateKey = struct {
         }
     }
 
+    /// This key, as the signer `zurl_ssh.Authenticator` takes.
+    ///
+    /// **The key must outlive the signer**, and the signer holds a
+    /// pointer to it. `deinit` wipes what the two slices point into, so a
+    /// signer that outlived its key would name a key that is gone.
+    pub fn signer(k: *const PrivateKey) Signer {
+        return .{
+            .ctx = @constCast(k),
+            .algorithm = k.algorithmName(),
+            .public_blob = k.publicBlob(),
+            .sign = signForSigner,
+        };
+    }
+
     /// Wipes the key material.
     ///
     /// **Every byte, and not only the secret half.** The public blob and
@@ -368,6 +386,15 @@ pub const PrivateKey = struct {
         k.comment_truncated = false;
     }
 };
+
+/// `PrivateKey.sign` behind the function pointer a `Signer` carries.
+///
+/// The two faults of `SignError` are both names `zurl_ssh.signer.Error`
+/// already has, so nothing is lost on the way through.
+fn signForSigner(ctx: ?*anyopaque, message: []const u8, out: []u8) SignerError![]u8 {
+    const k: *const PrivateKey = @ptrCast(@alignCast(ctx.?));
+    return k.sign(message, out);
+}
 
 /// Why a signature could not be built.
 pub const SignError = wire.WriteError || error{

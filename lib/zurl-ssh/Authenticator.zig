@@ -64,9 +64,11 @@ const Authenticator = @This();
 const std = @import("std");
 
 const privatekey = @import("privatekey.zig");
+const signer_seam = @import("signer.zig");
 const userauth = @import("userauth.zig");
 const wire = @import("wire.zig");
 
+const Signer = signer_seam.Signer;
 const Transport = @import("Transport.zig");
 
 /// How many bytes one request may take.
@@ -105,7 +107,20 @@ pub const Options = struct {
     user: []const u8,
     /// The key a `publickey` attempt signs with, or null for no
     /// `publickey` attempt. The caller owns it and wipes it.
+    ///
+    /// This is `signer` with the `zurl_ssh.signer.Signer` made for the
+    /// caller. Set one field or the other and never both: two answers to
+    /// one question is `error.TwoPublicKeySigners`.
     key: ?*const privatekey.PrivateKey = null,
+    /// Whatever holds the private key, for a `publickey` attempt whose
+    /// key is not in this process.
+    ///
+    /// **This is how a login through an agent works.**
+    /// `zurl_ssh.AgentClient.signer` gives one, and the private key stays
+    /// in the agent: this process asks for a signature and never reads a
+    /// key file. See `zurl_ssh.signer`, which is the seam both sides meet
+    /// at.
+    signer: ?Signer = null,
     /// The password a `password` or `keyboard-interactive` attempt sends,
     /// or null. **The caller owns it and wipes it.**
     password: ?[]const u8 = null,
@@ -153,8 +168,17 @@ pub const Error =
     Transport.ReceiveError ||
     userauth.BuildError ||
     userauth.ParseError ||
-    privatekey.SignError ||
+    signer_seam.Error ||
     error{
+        /// `Options.key` and `Options.signer` were both set, so the run
+        /// has two answers to one question. A caller's own bug, and an
+        /// error rather than an assert because a caller outside this
+        /// package can reach it.
+        ///
+        /// **Picking one silently is what this refuses to do.** The two
+        /// can name two different keys, and a login with the wrong one
+        /// would fail at the server with nothing said about why.
+        TwoPublicKeySigners,
         /// `authenticate` ran before the transport had a session
         /// identifier. A caller's own bug, and it is an error rather than
         /// an assert because a caller outside this package can reach it.
@@ -285,6 +309,7 @@ pub fn partialSuccess(a: *const Authenticator) bool {
 pub fn authenticate(a: *Authenticator) Error!void {
     if (a.options.user.len == 0) return error.UserNameEmpty;
     if (a.options.user.len > userauth.max_user_bytes) return error.UserNameTooLong;
+    if (a.options.key != null and a.options.signer != null) return error.TwoPublicKeySigners;
     if (a.transport.sessionId() == null) return error.SessionNotEstablished;
 
     try a.requestService();
@@ -360,7 +385,7 @@ fn attemptNone(a: *Authenticator) Error!bool {
 fn nextMethod(a: *const Authenticator) ?userauth.Method {
     const list: wire.NameList = .{ .text = a.acceptedMethods() };
 
-    if (a.options.key != null and
+    if (a.publicKeySigner() != null and
         !a.tried.contains(.publickey) and
         list.contains(userauth.Method.publickey.name()))
     {
@@ -382,6 +407,18 @@ fn nextMethod(a: *const Authenticator) ?userauth.Method {
     return null;
 }
 
+/// What signs a `publickey` attempt, or null when the caller gave
+/// nothing to sign with.
+///
+/// `Options.key` is turned into a signer here, so the rest of this file
+/// has one shape to read and never asks where the key lives.
+/// `authenticate` has already refused a caller that set both fields.
+fn publicKeySigner(a: *const Authenticator) ?Signer {
+    if (a.options.signer) |held| return held;
+    if (a.options.key) |key| return key.signer();
+    return null;
+}
+
 /// Runs both phases of a `publickey` attempt, RFC 4252 section 7.
 ///
 /// Returns true when the server accepted the signature.
@@ -392,11 +429,11 @@ fn attemptPublicKey(a: *Authenticator) Error!bool {
     // of them left a password behind.
     defer std.crypto.secureZero(u8, &a.request_storage);
 
-    const key = a.options.key.?;
+    const signer = a.publicKeySigner().?;
     const params: userauth.PublicKeyParams = .{
         .user = a.options.user,
-        .algorithm = key.algorithmName(),
-        .key_blob = key.publicBlob(),
+        .algorithm = signer.algorithm,
+        .key_blob = signer.public_blob,
     };
 
     // **Phase one asks whether the key would be taken, and signs
@@ -454,7 +491,7 @@ fn attemptPublicKey(a: *Authenticator) Error!bool {
     const signed = try userauth.writeSignatureBlob(&a.request_storage, session_id, params);
 
     var signature_storage: [privatekey.max_signature_bytes]u8 = undefined;
-    const signature = try key.sign(signed.blob, &signature_storage);
+    const signature = try signer.sign(signer.ctx, signed.blob, &signature_storage);
     const request = try userauth.finishPublicKeyRequest(&a.request_storage, signed, signature);
 
     a.counters.attempts += 1;

@@ -28,6 +28,14 @@
 //! `zurl_ssh.hostkey.refusalFor` names each refused algorithm and says
 //! why.
 //!
+//! **That limit is on the host key and on a key file, and not on an
+//! agent.** `AgentClient` asks an agent for the signature, so client
+//! authentication through an agent needs no signer from `std.crypto` at
+//! all, and an RSA key in the agent would work if
+//! `zurl_ssh.agent.Identity.usable` were widened to name it. The host key
+//! check is a different problem and it stays unsolved. Reading the two as
+//! one makes this look larger than it is.
+//!
 //! **Host key trust is the caller's decision and there is no way to skip
 //! it.** Verifying the server's signature over the exchange hash proves
 //! that the peer holds the private key for the key it presented. It proves
@@ -97,6 +105,17 @@ pub const privatekey = @import("zurl-ssh/privatekey.zig");
 /// Finds a private key on disk, the way curl and OpenSSH find one.
 pub const keyfile = @import("zurl-ssh/keyfile.zig");
 
+/// Whatever holds the private key for a `publickey` attempt: a key this
+/// process read, or an agent that never shows it one.
+pub const signer = @import("zurl-ssh/signer.zig");
+
+/// The SSH agent protocol, draft-miller-ssh-agent-04. Pure bytes.
+pub const agent = @import("zurl-ssh/agent.zig");
+
+/// One connection to an SSH agent over a unix domain socket: the key
+/// list, the filter, and the signature.
+pub const AgentClient = @import("zurl-ssh/AgentClient.zig");
+
 /// The connection protocol messages of RFC 4254. Pure bytes.
 pub const connection = @import("zurl-ssh/connection.zig");
 
@@ -136,6 +155,9 @@ test {
     _ = userauth;
     _ = privatekey;
     _ = keyfile;
+    _ = signer;
+    _ = agent;
+    _ = AgentClient;
     _ = connection;
     _ = Channel;
     _ = knownhosts;
@@ -144,6 +166,7 @@ test {
     _ = @import("zurl-ssh/handshake_test.zig");
     _ = @import("zurl-ssh/auth_test.zig");
     _ = @import("zurl-ssh/channel_test.zig");
+    _ = @import("zurl-ssh/agent_test.zig");
 }
 
 test "the package names only the algorithms it can run" {
