@@ -34,6 +34,7 @@ const hostkey = @import("hostkey.zig");
 const keyfile = @import("keyfile.zig");
 const messages = @import("messages.zig");
 const privatekey = @import("privatekey.zig");
+const signer_seam = @import("signer.zig");
 
 const Authenticator = @import("Authenticator.zig");
 const Channel = @import("Channel.zig");
@@ -97,6 +98,21 @@ pub const Options = struct {
     /// The password for `password` and `keyboard-interactive`, or null.
     /// **The caller owns it and wipes it.**
     password: ?[]const u8 = null,
+    /// Something that signs for the user without this process holding a
+    /// key, which is an SSH agent today. Null to sign with a key on disk.
+    ///
+    /// **This is the door an agent comes through.** `zurl_ssh.AgentClient`
+    /// hands one out with `signer()`, and the authenticator below runs the
+    /// same code for it as for a key this process loaded, because
+    /// `zurl_ssh.signer.Signer` is the one shape both answer.
+    ///
+    /// **A caller that sets this reads no key file at all.** The key
+    /// location and the passphrase are left alone, and `key_required` is
+    /// not consulted, because the question it asks is about a file this
+    /// connection never opens. Naming a signer and a key path together is
+    /// `error.TwoPublicKeySigners` rather than a quiet pick of one, the
+    /// same refusal `zurl_ssh.Authenticator` makes.
+    signer: ?signer_seam.Signer = null,
     /// Where the private key is. See `zurl_ssh.keyfile`.
     key_location: keyfile.Location = .{},
     /// The passphrase for an encrypted key, or null. **The caller owns it
@@ -217,6 +233,20 @@ started: struct {
 /// **`phase` says which step stopped**, and it is set before each one, so
 /// a caller reads it after a failure and never has to guess.
 pub fn open(c: *Client, gpa: std.mem.Allocator, io: Io, options: Options) Error!void {
+    // **Before the dial, because this asks nothing of the network.** A
+    // caller that named a signer and a key file gave two answers to one
+    // question, and the two can name two different keys. Picking one
+    // quietly would log in as somebody the caller did not name.
+    //
+    // `Authenticator.authenticate` keeps the same rule for the same pair.
+    // This one is here as well so the refusal costs no socket: a fault a
+    // caller can see by reading its own arguments must not wait on a
+    // connection to a host that may not answer.
+    if (options.signer != null) {
+        if (options.key_location.path != null) return error.TwoPublicKeySigners;
+        if (options.key_passphrase != null) return error.TwoPublicKeySigners;
+    }
+
     c.allocator = gpa;
     c.io = io;
     c.key = null;
@@ -289,8 +319,19 @@ pub fn open(c: *Client, gpa: std.mem.Allocator, io: Io, options: Options) Error!
     // **The key is loaded after the handshake and not before it.** A
     // passphrase that a user typed for a host whose key does not check out
     // is a passphrase spent for nothing, and the load reads a file.
+    // **A signer means no key file is read at all.** Something else holds
+    // the key, so a default name on this disk must not decide whether the
+    // connection starts. The pair that contradicts itself was refused at
+    // the top of `open`, before the dial.
+    //
+    // `key_required` is not consulted here either: it asks whether a
+    // missing key file stops the connection, and a caller that brought a
+    // signer is not answering that question.
     var loaded: privatekey.PrivateKey = undefined;
-    if (keyfile.load(
+    if (options.signer != null) {
+        // Nothing to load, and nothing to skip over either. `key` stays
+        // null and `signer` below is what signs.
+    } else if (keyfile.load(
         &loaded,
         gpa,
         io,
@@ -331,6 +372,7 @@ pub fn open(c: *Client, gpa: std.mem.Allocator, io: Io, options: Options) Error!
     c.authenticator.init(&c.transport, .{
         .user = options.user,
         .key = if (c.key) |*held| held else null,
+        .signer = options.signer,
         .password = options.password,
         .banner = options.banner,
     });

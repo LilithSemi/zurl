@@ -506,3 +506,109 @@ test "a caller that names a key and a signer at once is refused" {
 
     try testing.expectError(error.TwoPublicKeySigners, authenticator.authenticate());
 }
+
+const Client = @import("Client.zig");
+const hostkey = @import("hostkey.zig");
+
+test "a signer reaches the authenticator through Client, and no key file is read" {
+    // **`Client` is the door a caller comes through, so a signer that only
+    // `Authenticator` took was a seam nobody could reach.** The agent held
+    // the key, `Authenticator.Options` had a place to put it, and
+    // `Client.Options` did not. A consumer driving `Client` then had to
+    // rebuild the dial, the key exchange and the login to use an agent,
+    // and a second copy of that sequence is a second copy of the host key
+    // check, which is the last thing that may have two.
+    //
+    // This opens a whole connection with a signer and no key at all.
+    var f = try Fixture.start(.{});
+    defer f.stop();
+
+    const chosen = try f.client.selectIdentity();
+
+    var server: test_server = undefined;
+    try server.start(.{
+        .auth = .{
+            .user = "alice",
+            .public_key = chosen.key_blob,
+            .methods = "publickey",
+        },
+        .connection = .{ .service = .idle, .accept_request = "subsystem" },
+    });
+    defer server.stop();
+
+    var client: Client = undefined;
+    try client.open(testing.allocator, testing.io, .{
+        .peer = .{ .host = "127.0.0.1", .port = server.port() },
+        .verifier = server.verifier(),
+        .user = "alice",
+        .signer = f.client.signer(),
+    });
+    defer client.close();
+
+    // The agent signed once, and nothing came off the disk.
+    try testing.expectEqual(@as(u64, 1), f.client.counters.sign_requests);
+    try testing.expectEqualStrings("", client.keyPath());
+
+    // And the signature covered the session identifier, so it proves this
+    // session and not another. RFC 4252 section 7.
+    var r: wire.Reader = .init(f.fake.signedData());
+    const session_id = try r.string();
+    try testing.expect(session_id.len != 0);
+}
+
+test "a signer and a key the caller named are refused rather than one picked" {
+    // The same rule `Authenticator.authenticate` keeps, said at the door.
+    // The two can name two different keys, and picking one quietly logs in
+    // as somebody the caller did not name.
+    var f = try Fixture.start(.{});
+    defer f.stop();
+
+    // **`signer()` answers null until an identity is chosen**, so the
+    // choice comes first or the option below is null and the refusal has
+    // nothing to refuse. See `AgentClient.signer`.
+    _ = try f.client.selectIdentity();
+
+    var recorder: AcceptingVerifier = .{};
+    var client: Client = undefined;
+    try testing.expectError(error.TwoPublicKeySigners, client.open(
+        testing.allocator,
+        testing.io,
+        .{
+            .peer = .{ .host = "127.0.0.1", .port = 1 },
+            .verifier = recorder.verifier(),
+            .user = "alice",
+            .signer = f.client.signer(),
+            .key_location = .{ .path = "/nonexistent/id_ed25519" },
+        },
+    ));
+
+    // A passphrase says the same thing: the caller meant to open a file
+    // that this connection never opens.
+    var second: Client = undefined;
+    try testing.expectError(error.TwoPublicKeySigners, second.open(
+        testing.allocator,
+        testing.io,
+        .{
+            .peer = .{ .host = "127.0.0.1", .port = 1 },
+            .verifier = recorder.verifier(),
+            .user = "alice",
+            .signer = f.client.signer(),
+            .key_passphrase = "hunter2",
+        },
+    ));
+}
+
+/// A verifier that takes every key. The two tests above refuse before they
+/// dial, so nothing here is ever asked.
+const AcceptingVerifier = struct {
+    fn verifier(a: *AcceptingVerifier) hostkey.Verifier {
+        return .{ .ctx = a, .decide = decide };
+    }
+
+    fn decide(
+        _: ?*anyopaque,
+        _: hostkey.Peer,
+        _: hostkey.PublicKey,
+        _: []const u8,
+    ) hostkey.TrustError!void {}
+};

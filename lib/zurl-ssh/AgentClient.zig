@@ -13,6 +13,19 @@
 //! `zurl_ssh.signer.Signer`, so the authenticator runs the same code for
 //! an agent key and for a key on disk.
 //!
+//! **An `AgentClient` must not move once `connect` has run**, the rule
+//! `zurl_ssh.Authenticator` and `zurl_ssh.Transport` each keep. The
+//! `Signer` this hands out points into this value, and so does every
+//! identity `selectIdentity` chose, so a copy taken after the dial reads
+//! the wrong memory.
+//!
+//! **Allocate it, and do not put it on the stack.** It carries
+//! `max_answer_bytes` and `max_request_bytes` inline, which is tens of
+//! kilobytes, and a frame that cannot hold it is a stack overflow and not
+//! a fault a caller can read. The two rules above are rules and not
+//! advice: breaking either is memory corruption rather than an error, so
+//! nothing at run time will tell you that you did.
+//!
 //! A caller wires one up like this:
 //!
 //!     var client: zurl_ssh.AgentClient = undefined;
