@@ -58,7 +58,7 @@ pub const auth_socket_variable = "SSH_AUTH_SOCK";
 /// The message numbers of draft-miller-ssh-agent-04 section 5.1.
 ///
 /// Only the numbers this build sends or reads are named. The agent writes
-/// this byte, so the enum is non-exhaustive: `@enumFromInt` on a
+/// this byte, so the enum is non-exhaustive: `@fromBackingInt` on a
 /// non-exhaustive enum is defined for every one of the 256 values an agent
 /// can write, and `zurl_ssh.messages.Id` keeps the same rule for the same
 /// reason.
@@ -168,7 +168,7 @@ pub const request_identities_bytes = 4 + 1;
 pub fn writeRequestIdentities(out: []u8) BuildError![]u8 {
     var w: wire.Writer = .init(out);
     try w.uint32(1);
-    try w.byte(@intFromEnum(Id.request_identities));
+    try w.byte(@backingInt(Id.request_identities));
     return w.written();
 }
 
@@ -201,7 +201,7 @@ pub fn writeSignRequest(
     var w: wire.Writer = .init(out);
     try w.uint32(0);
     const body_at = w.at;
-    try w.byte(@intFromEnum(Id.sign_request));
+    try w.byte(@backingInt(Id.sign_request));
     try w.string(key_blob);
     try w.string(data);
     try w.uint32(flags);
@@ -336,7 +336,7 @@ pub const Iterator = struct {
 /// rather than walked until it runs out.
 pub fn parseIdentitiesAnswer(payload: []const u8) ParseError!Iterator {
     var r: wire.Reader = .init(payload);
-    switch (@as(Id, @enumFromInt(try r.byte()))) {
+    switch (@as(Id, @fromBackingInt(@intCast(try r.byte())))) {
         .identities_answer => {},
         .failure => return error.AgentRefused,
         else => return error.UnexpectedAgentMessage,
@@ -369,7 +369,7 @@ pub fn parseIdentitiesAnswer(payload: []const u8) ParseError!Iterator {
 /// one it does not know would stop working against a newer agent.
 pub fn parseSignResponse(payload: []const u8) ParseError![]const u8 {
     var r: wire.Reader = .init(payload);
-    switch (@as(Id, @enumFromInt(try r.byte()))) {
+    switch (@as(Id, @fromBackingInt(@intCast(try r.byte())))) {
         .sign_response => {},
         .failure => return error.AgentRefused,
         else => return error.UnexpectedAgentMessage,
@@ -417,7 +417,7 @@ fn rsaBlob(out: []u8) ![]u8 {
 /// of section 3.
 fn identitiesAnswer(out: []u8, blobs: []const []const u8) ![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.identities_answer));
+    try w.byte(@backingInt(Id.identities_answer));
     try w.uint32(@intCast(blobs.len));
     for (blobs) |blob| {
         try w.string(blob);
@@ -437,7 +437,7 @@ test "a request for identities is the two fields section 4.4 and section 3 give"
     const declared = try r.uint32();
     try testing.expectEqual(@as(u32, 1), declared);
     try testing.expectEqual(@as(usize, declared), r.left());
-    try testing.expectEqual(@intFromEnum(Id.request_identities), try r.byte());
+    try testing.expectEqual(@backingInt(Id.request_identities), try r.byte());
     try testing.expect(r.atEnd());
 }
 
@@ -454,7 +454,7 @@ test "a sign request carries the key, the data, and the flags section 4.5 gives"
     // thing a framing bug gets wrong. Section 3 says
     // `byte[message length - 1]` follows the type byte.
     try testing.expectEqual(@as(usize, declared), r.left());
-    try testing.expectEqual(@intFromEnum(Id.sign_request), try r.byte());
+    try testing.expectEqual(@backingInt(Id.sign_request), try r.byte());
     try testing.expectEqualSlices(u8, blob, try r.string());
     try testing.expectEqualStrings("the blob RFC 4252 signs", try r.string());
     try testing.expectEqual(Flags.none, try r.uint32());
@@ -522,13 +522,13 @@ test "a key blob that is not a string at all is walked past and stops nothing" {
 }
 
 test "SSH_AGENT_FAILURE is a named refusal for both requests" {
-    const failure = [_]u8{@intFromEnum(Id.failure)};
+    const failure = [_]u8{@backingInt(Id.failure)};
     try testing.expectError(error.AgentRefused, parseSignResponse(&failure));
     try testing.expectError(error.AgentRefused, parseIdentitiesAnswer(&failure));
 
     // A message this build never asked for is apart from a refusal,
     // because the two say different things about the agent.
-    const success = [_]u8{@intFromEnum(Id.success)};
+    const success = [_]u8{@backingInt(Id.success)};
     try testing.expectError(error.UnexpectedAgentMessage, parseSignResponse(&success));
     try testing.expectError(error.UnexpectedAgentMessage, parseIdentitiesAnswer(&success));
 
@@ -540,7 +540,7 @@ test "SSH_AGENT_FAILURE is a named refusal for both requests" {
 test "a sign response gives back the signature blob and never opens it" {
     var storage: [128]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(Id.sign_response));
+    try w.byte(@backingInt(Id.sign_response));
     var blob_storage: [96]u8 = undefined;
     var blob: wire.Writer = .init(&blob_storage);
     try blob.string("ssh-ed25519");
@@ -582,7 +582,7 @@ test "a length that runs past the buffer is refused and no key is returned" {
     // million. **The cost of that claim is one comparison.**
     var storage: [32]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(Id.identities_answer));
+    try w.byte(@backingInt(Id.identities_answer));
     try w.uint32(1);
     try w.bytes("\xff\xff\xff\xff\x00\x00\x00\x00");
 
@@ -593,7 +593,7 @@ test "a length that runs past the buffer is refused and no key is returned" {
     // way.
     var signature_storage: [16]u8 = undefined;
     var signature: wire.Writer = .init(&signature_storage);
-    try signature.byte(@intFromEnum(Id.sign_response));
+    try signature.byte(@backingInt(Id.sign_response));
     try signature.bytes("\xff\xff\xff\xff\x01");
     try testing.expectError(error.LengthOutOfRange, parseSignResponse(signature.written()));
 }
@@ -604,12 +604,12 @@ test "a count larger than the answer could hold is refused before the walk" {
     // loop two thousand times to find that out.
     var storage: [16]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(Id.identities_answer));
+    try w.byte(@backingInt(Id.identities_answer));
     try w.uint32(max_identities);
     try testing.expectError(error.LengthOutOfRange, parseIdentitiesAnswer(w.written()));
 
     var too_many: wire.Writer = .init(&storage);
-    try too_many.byte(@intFromEnum(Id.identities_answer));
+    try too_many.byte(@backingInt(Id.identities_answer));
     try too_many.uint32(max_identities + 1);
     try testing.expectError(error.TooManyIdentities, parseIdentitiesAnswer(too_many.written()));
 }
@@ -617,7 +617,7 @@ test "a count larger than the answer could hold is refused before the walk" {
 test "a signature blob longer than the bound is refused by its own name" {
     var storage: [max_signature_bytes + 64]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(Id.sign_response));
+    try w.byte(@backingInt(Id.sign_response));
     var long: [max_signature_bytes + 1]u8 = undefined;
     @memset(&long, 0x66);
     try w.string(&long);

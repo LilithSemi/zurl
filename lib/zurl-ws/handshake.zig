@@ -663,7 +663,7 @@ test "an accept value longer than its storage is dropped and never cut" {
     // handshake is the same answer with no chance of a partial compare.
     var storage: ResponseStorage = .{};
     const response = try readHead(
-        "HTTP/1.1 101 x\r\nSec-WebSocket-Accept: " ++ ("Q" ** 200) ++ "\r\n\r\n",
+        "HTTP/1.1 101 x\r\nSec-WebSocket-Accept: " ++ @as([200]u8, @splat('Q')) ++ "\r\n\r\n",
         &storage,
     );
     try testing.expectEqual(@as(?[]const u8, null), response.accept);

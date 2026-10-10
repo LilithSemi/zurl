@@ -115,7 +115,7 @@ pub const Header = struct {
     pub fn parse(bytes: *const [header_len]u8) Header {
         return .{
             .length = std.mem.readInt(u24, bytes[0..3], .big),
-            .type = @enumFromInt(bytes[3]),
+            .type = @fromBackingInt(@intCast(bytes[3])),
             .flags = bytes[4],
             // The high bit of octet 5 is reserved. Section 4.1 says a
             // receiver must ignore it, so the mask drops it rather than
@@ -131,7 +131,7 @@ pub const Header = struct {
         // peer's. Nothing outside can reach this path.
         std.debug.assert(self.length <= length_max);
         std.mem.writeInt(u24, out[0..3], @intCast(self.length), .big);
-        out[3] = @intFromEnum(self.type);
+        out[3] = @backingInt(self.type);
         out[4] = self.flags;
         std.mem.writeInt(u32, out[5..9], @as(u32, self.stream_id), .big);
     }
@@ -208,7 +208,7 @@ test "an unknown frame type parses into a value rather than a fault" {
     const header = Header.parse(&bytes);
     try testing.expect(!header.type.isKnown());
     try testing.expectEqual(@as(?[]const u8, null), header.type.name());
-    try testing.expectEqual(@as(u8, 0xff), @intFromEnum(header.type));
+    try testing.expectEqual(@as(u8, 0xff), @backingInt(header.type));
 }
 
 test "every known type has its number and its name from RFC 9113 section 6" {
@@ -226,11 +226,11 @@ test "every known type has its number and its name from RFC 9113 section 6" {
     };
     for (table) |row| {
         try testing.expect(row[0].isKnown());
-        try testing.expectEqual(row[1], @intFromEnum(row[0]));
+        try testing.expectEqual(row[1], @backingInt(row[0]));
         try testing.expectEqualStrings(row[2], row[0].name().?);
     }
     // 0x0a is the first number past the table, so it is unknown.
-    try testing.expect(!(@as(Type, @enumFromInt(0x0a))).isKnown());
+    try testing.expect(!(@as(Type, @fromBackingInt(@intCast(0x0a)))).isKnown());
 }
 
 test "only the three header-block types carry a fragment" {
@@ -239,7 +239,7 @@ test "only the three header-block types carry a fragment" {
     try testing.expect(Type.continuation.carriesHeaderBlock());
     try testing.expect(!Type.data.carriesHeaderBlock());
     try testing.expect(!Type.settings.carriesHeaderBlock());
-    try testing.expect(!(@as(Type, @enumFromInt(0xff))).carriesHeaderBlock());
+    try testing.expect(!(@as(Type, @fromBackingInt(@intCast(0xff)))).carriesHeaderBlock());
 }
 
 test "has asks for every bit of the mask" {

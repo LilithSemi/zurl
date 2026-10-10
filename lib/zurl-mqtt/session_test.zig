@@ -324,7 +324,7 @@ test "a SUBACK for a request nobody sent is a protocol error" {
 
 test "an answer to the connect that is not a CONNACK is refused by name" {
     var server: test_server.Server = undefined;
-    try server.start(.{ .connack_type = @intFromEnum(packet.Type.pingresp) });
+    try server.start(.{ .connack_type = @backingInt(packet.Type.pingresp) });
     defer server.stop();
 
     const f = try Fetcher.create(testing.allocator, testing.io);

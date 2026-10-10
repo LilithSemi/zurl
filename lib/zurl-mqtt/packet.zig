@@ -195,7 +195,7 @@ fn frame(w: *Writer, kind: Type, flags: u4, body_len: usize) BuildError!void {
     // that far in front of the body and the packet then moves to the front
     // of the buffer. One copy, and every length exact.
     const start = header_room - 1 - length.len;
-    w.bytes[start] = (@as(u8, @intFromEnum(kind)) << 4) | flags;
+    w.bytes[start] = (@as(u8, @backingInt(kind)) << 4) | flags;
     @memcpy(w.bytes[start + 1 ..][0..length.len], length);
     const total = 1 + length.len + body_len;
     std.mem.copyForwards(u8, w.bytes[0..total], w.bytes[start..][0..total]);
@@ -327,7 +327,7 @@ pub const ReturnCode = enum(u8) {
 /// Reads the return code out of a CONNACK's body. Section 3.2.
 pub fn connackReturnCode(body: []const u8) ReadError!ReturnCode {
     if (body.len < 2) return error.PacketTruncated;
-    return @enumFromInt(body[1]);
+    return @fromBackingInt(@intCast(body[1]));
 }
 
 /// The return code a SUBACK carries for the one filter this package sends.
@@ -514,7 +514,7 @@ test "a payload past 127 bytes puts a two byte length on the wire" {
     const w = try testWriter();
     defer testing.allocator.destroy(w);
 
-    const payload = [_]u8{'K'} ** 300;
+    const payload: [300]u8 = @splat('K');
     try writePublish(w, "t/k", &payload);
     const bytes = w.written();
     try testing.expectEqualSlices(u8, &.{ 0x30, 0xb1, 0x02, 0x00, 0x03, 't', '/', 'k' }, bytes[0..8]);

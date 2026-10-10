@@ -508,7 +508,8 @@ test "readDate refuses every shape curl 8.21.0 refuses" {
     }
 
     // Past the bound, whatever it holds.
-    const long = "Sun, 06 Nov 1994 08:49:37 GMT" ** 8;
+    const date = "Sun, 06 Nov 1994 08:49:37 GMT";
+    const long = std.mem.sliceAsBytes(&@as([8][date.len]u8, @splat(date.*)));
     try testing.expect(long.len > max_date_len);
     try testing.expectEqual(@as(?i64, null), readDate(long));
 }

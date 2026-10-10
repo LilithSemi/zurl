@@ -857,9 +857,10 @@ const inputs_digest_len = std.crypto.hash.sha2.Sha256.digest_length;
 /// connection pool the same way, for the same reason.
 fn inputsDigest(in: zurl_core.ca.Inputs) [inputs_digest_len]u8 {
     var hash: std.crypto.hash.sha2.Sha256 = .init(.{});
-    inline for (@typeInfo(zurl_core.ca.Inputs).@"struct".fields) |field| {
-        const value = @field(in, field.name);
-        switch (@typeInfo(field.type)) {
+    const info = @typeInfo(zurl_core.ca.Inputs).@"struct";
+    inline for (info.field_names, info.field_types) |field_name, FieldType| {
+        const value = @field(in, field_name);
+        switch (@typeInfo(FieldType)) {
             .bool => hash.update(&[_]u8{ 2, @intFromBool(value) }),
             else => {
                 if (value) |text| {
@@ -2830,11 +2831,11 @@ test "a netrc token of 1200 characters authenticates and reaches the wire whole"
     const url_text = try std.fmt.allocPrint(testing.allocator, "http://127.0.0.1:{d}/nix-cache-info", .{server.port()});
     defer testing.allocator.free(url_text);
 
-    const token = "t" ** long_token_len;
+    const token: [long_token_len]u8 = @splat('t');
     const netrc_text = try std.fmt.allocPrint(
         testing.allocator,
         "machine 127.0.0.1 login cache password {s}\n",
-        .{token},
+        .{&token},
     );
     defer testing.allocator.free(netrc_text);
 
@@ -2850,10 +2851,10 @@ test "a netrc token of 1200 characters authenticates and reaches the wire whole"
     const head = server.requestHead(0).?;
     try testing.expectEqual(@as(usize, 1), test_server.countAuthorizationHeaders(head));
 
-    const expected_len = zurl_core.auth.basicValueSize(.{ .user = "cache", .password = token });
+    const expected_len = zurl_core.auth.basicValueSize(.{ .user = "cache", .password = &token });
     const expected_buf = try testing.allocator.alloc(u8, expected_len);
     defer testing.allocator.free(expected_buf);
-    const expected = try zurl_core.auth.basicValue(expected_buf, .{ .user = "cache", .password = token });
+    const expected = try zurl_core.auth.basicValue(expected_buf, .{ .user = "cache", .password = &token });
     try testing.expect(std.mem.indexOf(u8, head, expected) != null);
 }
 
@@ -2981,8 +2982,8 @@ test "the header line bound comes from the engine and not from a number written 
 
     // A 1200-character token is far inside the bound, so nothing refuses
     // the credential this defect was reported for.
-    const value_len = zurl_core.auth.basicValueLen(.{ .user = "cache", .password = "t" ** long_token_len });
-    try testing.expect(!authorizationOversize("x" ** 8));
+    const value_len = zurl_core.auth.basicValueLen(.{ .user = "cache", .password = &@as([long_token_len]u8, @splat('t')) });
+    try testing.expect(!authorizationOversize(&@as([8]u8, @splat('x'))));
     try testing.expect(authorization_line_overhead + value_len < authorization_line_len_max);
 }
 
@@ -3697,7 +3698,7 @@ test "an oversize digest challenge beside a basic one is not answered with basic
     // password in reversible base64 to a server that had offered a scheme
     // where the password never travels, and the length of a realm decided
     // which happened.
-    const long_realm = "r" ** 1100;
+    const long_realm: [1100]u8 = @splat('r');
     const challenge = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"small\"\r\n" ++
         "WWW-Authenticate: Digest realm=\"" ++ long_realm ++ "\", nonce=\"abc123\", qop=\"auth\"\r\n" ++
         "Content-Length: 0\r\nConnection: close\r\n\r\n";
@@ -3733,7 +3734,7 @@ test "an oversize digest challenge beside a basic one is not answered with basic
 test "an oversize basic challenge beside a digest one still gets a digest answer" {
     // The oversize flag must not cost a challenge that fits. Only the
     // dropped `Digest` case has to stop the exchange.
-    const long_realm = "r" ** 1100;
+    const long_realm: [1100]u8 = @splat('r');
     const challenge = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"" ++ long_realm ++ "\"\r\n" ++
         "WWW-Authenticate: Digest realm=\"test\", nonce=\"abc123\", qop=\"auth\"\r\n" ++
         "Content-Length: 0\r\nConnection: close\r\n\r\n";
@@ -3858,12 +3859,12 @@ test "a challenge too long for the engine is reported, not read as no challenge"
     // The engine drops a `WWW-Authenticate` value it cannot hold, and used
     // to report the same `null` a response with no challenge reports. A
     // caller then saw a bare 401 with no reason for it.
-    const realm = "r" ** 2048;
+    const realm: [2048]u8 = @splat('r');
     const response_text = try std.fmt.allocPrint(
         testing.allocator,
         "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Digest realm=\"{s}\", nonce=\"n\"\r\n" ++
             "Content-Length: 0\r\nConnection: close\r\n\r\n",
-        .{realm},
+        .{&realm},
     );
     defer testing.allocator.free(response_text);
 

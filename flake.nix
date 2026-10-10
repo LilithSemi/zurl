@@ -58,7 +58,7 @@
           default = pkgs.mkShell {
             name = "zurl-dev-shell";
             packages = with pkgs; [
-              zig
+              zig_0_17
             ];
           };
         }
@@ -75,13 +75,13 @@
 
             src = lib.cleanSource ./.;
 
-            zigDeps = pkgs.zig.fetchDeps {
+            zigDeps = pkgs.zig_0_17.fetchDeps {
               inherit (finalAttrs) src pname version;
               hash = "sha256-Njs9o+QSVIVD6zs4OebDwo8Pm+tZosCwDA2t+uH007E=";
             };
 
             nativeBuildInputs = with pkgs; [
-              zig
+              zig_0_17
             ];
 
             doCheck = true;

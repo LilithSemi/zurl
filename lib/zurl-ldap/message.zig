@@ -130,7 +130,7 @@ pub const Message = struct {
 /// The result codes RFC 4511 section 4.1.9 and Appendix A name.
 ///
 /// **An exhaustive enum with a `parse` that returns null**, and never
-/// `@enumFromInt` on a number a server chose. A code outside this set is
+/// `@fromBackingInt` on a number a server chose. A code outside this set is
 /// `error.UnknownResultCode`, which a caller reports with the number
 /// itself, rather than a value with no name behind it.
 pub const ResultCode = enum(i32) {
@@ -463,7 +463,7 @@ pub fn writeSearch(
     try w.writeInteger(ber.integer, id);
     try w.beginElement(.application(app_search_request, true));
     try w.writeElement(ber.octet_string, t.dn);
-    try w.writeInteger(ber.enumerated, @intFromEnum(t.scope));
+    try w.writeInteger(ber.enumerated, @backingInt(t.scope));
     try w.writeInteger(ber.enumerated, deref_never);
     try w.writeInteger(ber.integer, size_limit);
     try w.writeInteger(ber.integer, time_limit);
@@ -690,7 +690,7 @@ test "a failing result carries the server's own matched name and words" {
 
 test "a result code this build has no name for is refused and its number kept" {
     // 91 is in no RFC 4511 table. A build that read it with
-    // `@enumFromInt` would carry a value with no name behind it, which is
+    // `@fromBackingInt` would carry a value with no name behind it, which is
     // undefined behaviour for an invalid tag.
     const bytes = [_]u8{
         0x30, 0x0c, 0x02, 0x01, 0x02, 0x65, 0x07,
@@ -752,8 +752,8 @@ test "an entry whose attribute list is not a SEQUENCE is refused" {
 }
 
 test "every result code has a sentence and none of them is empty" {
-    inline for (@typeInfo(ResultCode).@"enum".fields) |field| {
-        const code: ResultCode = @field(ResultCode, field.name);
+    inline for (@typeInfo(ResultCode).@"enum".field_names) |field_name| {
+        const code: ResultCode = @field(ResultCode, field_name);
         try testing.expect(code.describe().len != 0);
     }
 }

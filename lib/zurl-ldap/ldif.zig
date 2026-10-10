@@ -657,11 +657,11 @@ test "a field longer than this file writes is refused and never cut" {
     defer list.deinit(testing.allocator);
     var s = sink(&list);
 
-    const long_dn = "d" ** (max_dn_bytes + 1);
-    try testing.expectError(error.FieldTooLarge, writeDn(&s, long_dn));
+    const long_dn: [max_dn_bytes + 1]u8 = @splat('d');
+    try testing.expectError(error.FieldTooLarge, writeDn(&s, &long_dn));
 
-    const long_attribute = "a" ** (max_attribute_bytes + 1);
-    try testing.expectError(error.FieldTooLarge, writeValue(&s, long_attribute, "x"));
+    const long_attribute: [max_attribute_bytes + 1]u8 = @splat('a');
+    try testing.expectError(error.FieldTooLarge, writeValue(&s, &long_attribute, "x"));
 
     // Nothing was written for either.
     try testing.expectEqual(@as(usize, 0), list.items.len);

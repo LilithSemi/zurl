@@ -95,6 +95,7 @@ pub fn dial(io: std.Io, path: []const u8) DialError!std.Io.net.Stream {
         error.SystemFdQuotaExceeded,
         error.WouldBlock,
         error.NetworkDown,
+        error.ConnectionRefused,
         => error.CouldNotConnect,
         error.AddressFamilyUnsupported,
         error.ProtocolUnsupportedBySystem,

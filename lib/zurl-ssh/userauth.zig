@@ -63,11 +63,11 @@ pub const Id = enum(u8) {
 /// payload.
 ///
 /// The same rule `zurl_ssh.messages.idOf` keeps: an empty payload carries
-/// no message at all, and `@enumFromInt` on a non-exhaustive enum is
+/// no message at all, and `@fromBackingInt` on a non-exhaustive enum is
 /// defined for every one of the 256 values a peer can write.
 pub fn idOf(payload: []const u8) ?Id {
     if (payload.len == 0) return null;
-    return @enumFromInt(payload[0]);
+    return @fromBackingInt(@intCast(payload[0]));
 }
 
 /// The bound on a user name.
@@ -123,8 +123,8 @@ pub const Method = enum {
 
     /// The method `text` names, or null.
     pub fn fromName(text: []const u8) ?Method {
-        inline for (@typeInfo(Method).@"enum".fields) |field| {
-            const candidate: Method = @enumFromInt(field.value);
+        inline for (@typeInfo(Method).@"enum".field_names) |field_name| {
+            const candidate: Method = @field(Method, field_name);
             if (std.mem.eql(u8, text, candidate.name())) return candidate;
         }
         return null;
@@ -177,7 +177,7 @@ pub const BuildError = wire.WriteError || error{
 /// Builds a `SSH_MSG_SERVICE_REQUEST`, RFC 4253 section 10.
 pub fn writeServiceRequest(out: []u8, service: []const u8) BuildError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.service_request));
+    try w.byte(@backingInt(Id.service_request));
     try w.string(service);
     return w.written();
 }
@@ -191,7 +191,7 @@ pub fn writeServiceRequest(out: []u8, service: []const u8) BuildError![]u8 {
 pub fn writeNoneRequest(out: []u8, user: []const u8) BuildError![]u8 {
     if (user.len > max_user_bytes) return error.UserNameTooLong;
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.request));
+    try w.byte(@backingInt(Id.request));
     try w.string(user);
     try w.string(service_connection);
     try w.string(Method.none.name());
@@ -215,7 +215,7 @@ pub const PublicKeyParams = struct {
 pub fn writePublicKeyQuery(out: []u8, p: PublicKeyParams) BuildError![]u8 {
     if (p.user.len > max_user_bytes) return error.UserNameTooLong;
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.request));
+    try w.byte(@backingInt(Id.request));
     try w.string(p.user);
     try w.string(service_connection);
     try w.string(Method.publickey.name());
@@ -276,7 +276,7 @@ pub fn writeSignatureBlob(
     var w: wire.Writer = .init(out);
     try w.string(session_id);
     const request_at = w.at;
-    try w.byte(@intFromEnum(Id.request));
+    try w.byte(@backingInt(Id.request));
     try w.string(p.user);
     try w.string(service_connection);
     try w.string(Method.publickey.name());
@@ -323,7 +323,7 @@ pub fn writePasswordRequest(
     if (user.len > max_user_bytes) return error.UserNameTooLong;
     if (password.len > max_password_bytes) return error.PasswordTooLong;
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.request));
+    try w.byte(@backingInt(Id.request));
     try w.string(user);
     try w.string(service_connection);
     try w.string(Method.password.name());
@@ -347,7 +347,7 @@ pub fn writeKeyboardInteractiveRequest(
 ) BuildError![]u8 {
     if (user.len > max_user_bytes) return error.UserNameTooLong;
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.request));
+    try w.byte(@backingInt(Id.request));
     try w.string(user);
     try w.string(service_connection);
     try w.string(Method.keyboard_interactive.name());
@@ -362,7 +362,7 @@ pub fn writeKeyboardInteractiveRequest(
 /// `writePasswordRequest`.
 pub fn writeInfoResponse(out: []u8, answers: []const []const u8) BuildError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.info_response));
+    try w.byte(@backingInt(Id.info_response));
     try w.uint32(@intCast(answers.len));
     for (answers) |answer| {
         if (answer.len > max_password_bytes) return error.PasswordTooLong;
@@ -392,7 +392,7 @@ pub const ParseError = wire.ReadError || error{
 /// starts and then stops short is still `error.Truncated`.
 pub fn parseServiceAccept(payload: []const u8) ParseError![]const u8 {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.service_accept)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.service_accept)) return error.WrongMessage;
     if (r.atEnd()) return "";
     return r.string();
 }
@@ -415,7 +415,7 @@ pub const Failure = struct {
 /// Reads a `SSH_MSG_USERAUTH_FAILURE`.
 pub fn parseFailure(payload: []const u8) ParseError!Failure {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.failure)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.failure)) return error.WrongMessage;
     const methods = try r.nameList();
     if (methods.text.len > max_method_list_bytes) return error.MethodListTooLong;
     if (methods.count() > max_method_count) return error.MethodListTooLong;
@@ -429,7 +429,7 @@ pub fn parseFailure(payload: []const u8) ParseError!Failure {
 /// so it is refused rather than ignored.
 pub fn parseSuccess(payload: []const u8) ParseError!void {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.success)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.success)) return error.WrongMessage;
     if (!r.atEnd()) return error.WrongMessage;
 }
 
@@ -446,7 +446,7 @@ pub const Banner = struct {
 /// Reads a `SSH_MSG_USERAUTH_BANNER`.
 pub fn parseBanner(payload: []const u8) ParseError!Banner {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.banner)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.banner)) return error.WrongMessage;
     const message = try r.string();
     if (message.len > max_banner_bytes) return error.BannerTooLong;
     return .{
@@ -471,7 +471,7 @@ pub const PublicKeyOk = struct {
 /// something else is answering a question nobody asked.
 pub fn parsePublicKeyOk(payload: []const u8) ParseError!PublicKeyOk {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.method_specific)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.method_specific)) return error.WrongMessage;
     return .{ .algorithm = try r.string(), .key_blob = try r.string() };
 }
 
@@ -493,7 +493,7 @@ pub const PasswordChangeRequest = struct {
 /// `error.PasswordChangeRequired`.
 pub fn parsePasswordChangeRequest(payload: []const u8) ParseError!PasswordChangeRequest {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.method_specific)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.method_specific)) return error.WrongMessage;
     const prompt = try r.string();
     if (prompt.len > max_banner_bytes) return error.BannerTooLong;
     return .{
@@ -553,7 +553,7 @@ pub const InfoRequest = struct {
 /// `wire.Reader` bounds every string.
 pub fn parseInfoRequest(payload: []const u8) ParseError!InfoRequest {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.method_specific)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.method_specific)) return error.WrongMessage;
     const name = try r.string();
     if (name.len > max_banner_bytes) return error.BannerTooLong;
     const instruction = try r.string();
@@ -973,7 +973,7 @@ test "a method list past the bound is refused and never walked" {
     // process does.** A list longer than the bound is one comparison.
     var storage: [max_method_list_bytes + 64]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(Id.failure));
+    try w.byte(@backingInt(Id.failure));
     const long: [max_method_list_bytes + 1]u8 = @splat('a');
     try w.string(&long);
     try w.boolean(false);
@@ -982,7 +982,7 @@ test "a method list past the bound is refused and never walked" {
     // A list inside the byte bound that names too many methods is refused
     // as well, because the count is what a caller walks.
     var many: wire.Writer = .init(&storage);
-    try many.byte(@intFromEnum(Id.failure));
+    try many.byte(@backingInt(Id.failure));
     var text: [(max_method_count + 1) * 2 - 1]u8 = undefined;
     for (0..text.len) |i| text[i] = if (i % 2 == 1) ',' else 'a';
     try many.string(&text);
@@ -1010,7 +1010,7 @@ test "a banner reads its message, and a missing language tag is not a fault" {
 
     var storage: [max_banner_bytes + 64]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(Id.banner));
+    try w.byte(@backingInt(Id.banner));
     const long: [max_banner_bytes + 1]u8 = @splat('a');
     try w.string(&long);
     try testing.expectError(error.BannerTooLong, parseBanner(w.written()));
@@ -1142,19 +1142,19 @@ test "the banner filter drops everything a terminal would act on" {
 
 test "a message number the peer invented is read and never used as a tag" {
     const id = idOf(&.{0xfe}).?;
-    try testing.expectEqual(@as(u8, 0xfe), @intFromEnum(id));
+    try testing.expectEqual(@as(u8, 0xfe), @backingInt(id));
     try testing.expectEqual(@as(?Id, null), idOf(""));
     try testing.expectEqual(Id.failure, idOf(&.{ 51, 1, 2 }).?);
     try testing.expectEqual(Id.method_specific, idOf(&.{60}).?);
 }
 
 test "the message numbers are the ones RFC 4252 section 6 gives" {
-    try testing.expectEqual(@as(u8, 5), @intFromEnum(Id.service_request));
-    try testing.expectEqual(@as(u8, 6), @intFromEnum(Id.service_accept));
-    try testing.expectEqual(@as(u8, 50), @intFromEnum(Id.request));
-    try testing.expectEqual(@as(u8, 51), @intFromEnum(Id.failure));
-    try testing.expectEqual(@as(u8, 52), @intFromEnum(Id.success));
-    try testing.expectEqual(@as(u8, 53), @intFromEnum(Id.banner));
-    try testing.expectEqual(@as(u8, 60), @intFromEnum(Id.method_specific));
-    try testing.expectEqual(@as(u8, 61), @intFromEnum(Id.info_response));
+    try testing.expectEqual(@as(u8, 5), @backingInt(Id.service_request));
+    try testing.expectEqual(@as(u8, 6), @backingInt(Id.service_accept));
+    try testing.expectEqual(@as(u8, 50), @backingInt(Id.request));
+    try testing.expectEqual(@as(u8, 51), @backingInt(Id.failure));
+    try testing.expectEqual(@as(u8, 52), @backingInt(Id.success));
+    try testing.expectEqual(@as(u8, 53), @backingInt(Id.banner));
+    try testing.expectEqual(@as(u8, 60), @backingInt(Id.method_specific));
+    try testing.expectEqual(@as(u8, 61), @backingInt(Id.info_response));
 }

@@ -468,11 +468,14 @@ test "a header list past the byte bound is refused" {
     // A literal without indexing with a one octet name and no value costs
     // 33 bytes. Three fit in 100 and four do not.
     const one = [_]u8{ 0x00, 0x01, 'a', 0x00 };
-    var list = try decoder.decode(gpa, &(one ** 3));
+    var list = try decoder.decode(gpa, &(one ++ one ++ one));
     defer list.deinit(gpa);
     try testing.expectEqual(@as(usize, 99), list.size);
 
-    try testing.expectError(error.HeaderListTooLarge, decoder.decode(gpa, &(one ** 4)));
+    try testing.expectError(
+        error.HeaderListTooLarge,
+        decoder.decode(gpa, &(one ++ one ++ one ++ one)),
+    );
 }
 
 test "one long string is refused against the same byte bound" {
@@ -482,11 +485,12 @@ test "one long string is refused against the same byte bound" {
 
     // The budget for one field is 100 less the 32 bytes of overhead. A
     // name of 60 leaves 8, which a value of 20 does not fit.
-    const split = [_]u8{ 0x00, 60 } ++ [_]u8{'a'} ** 60 ++ [_]u8{20} ++ [_]u8{'b'} ** 20;
+    const split = [_]u8{ 0x00, 60 } ++ @as([60]u8, @splat('a')) ++
+        [_]u8{20} ++ @as([20]u8, @splat('b'));
     try testing.expectError(error.HeaderListTooLarge, decoder.decode(gpa, &split));
 
     // A name of 200 is past the whole budget on its own.
-    const single = [_]u8{ 0x00, 200 } ++ [_]u8{'a'} ** 200 ++ [_]u8{0};
+    const single = [_]u8{ 0x00, 200 } ++ @as([200]u8, @splat('a')) ++ [_]u8{0};
     try testing.expectError(error.HeaderListTooLarge, decoder.decode(gpa, &single));
 }
 
@@ -495,11 +499,14 @@ test "a header list past the field count is refused" {
     var decoder: Decoder = .init(.{ .field_count_max = 4 });
     defer decoder.deinit(gpa);
 
-    var list = try decoder.decode(gpa, &([_]u8{0x82} ** 4));
+    var list = try decoder.decode(gpa, &@as([4]u8, @splat(0x82)));
     defer list.deinit(gpa);
     try testing.expectEqual(@as(usize, 4), list.fields.items.len);
 
-    try testing.expectError(error.TooManyHeaderFields, decoder.decode(gpa, &([_]u8{0x82} ** 5)));
+    try testing.expectError(
+        error.TooManyHeaderFields,
+        decoder.decode(gpa, &@as([5]u8, @splat(0x82))),
+    );
 }
 
 test "a decompression bomb stops at the byte bound" {
@@ -515,7 +522,7 @@ test "a decompression bomb stops at the byte bound" {
     var seed: std.ArrayList(u8) = .empty;
     defer seed.deinit(gpa);
     try seed.appendSlice(gpa, &.{ 0x40, 0x01, 'a', 0x7f, 0xa1, 0x1e });
-    try seed.appendSlice(gpa, &([_]u8{'x'} ** 4000));
+    try seed.appendSlice(gpa, &@as([4000]u8, @splat('x')));
 
     var first = try decoder.decode(gpa, seed.items);
     defer first.deinit(gpa);
@@ -523,12 +530,15 @@ test "a decompression bomb stops at the byte bound" {
 
     // 200 octets of index 62 would name 200 fields of 4033 bytes, which is
     // about 800 KiB out of 200 in. The bound stops it well before that.
-    try testing.expectError(error.HeaderListTooLarge, decoder.decode(gpa, &([_]u8{0xbe} ** 200)));
+    try testing.expectError(
+        error.HeaderListTooLarge,
+        decoder.decode(gpa, &@as([200]u8, @splat(0xbe))),
+    );
 }
 
 test "an integer that never ends is refused, whichever representation carries it" {
     const gpa = testing.allocator;
-    const forever = [_]u8{0x80} ** 32;
+    const forever: [32]u8 = @splat(0x80);
     try testing.expectError(error.IntegerTooLong, decodeOnce(gpa, &([_]u8{0xff} ++ forever)));
     try testing.expectError(error.IntegerTooLong, decodeOnce(gpa, &([_]u8{0x7f} ++ forever)));
     try testing.expectError(error.IntegerTooLong, decodeOnce(gpa, &([_]u8{0x3f} ++ forever)));

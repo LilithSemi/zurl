@@ -261,14 +261,14 @@ test "an increment of zero is a fault, RFC 9204 section 4.4.3" {
 }
 
 test "an integer that never ends is refused, whichever instruction carries it" {
-    const forever = [_]u8{0x80} ** 32;
+    const forever: [32]u8 = @splat(0x80);
     inline for ([_]u8{ 0xff, 0x7f, 0x3f }) |first| {
         try testing.expectError(error.IntegerTooLong, read(&([_]u8{first} ++ forever)));
     }
 }
 
 test "an integer larger than this build holds is refused before it wraps" {
-    const over = [_]u8{ 0xff, 0xff } ++ [_]u8{0xff} ** 7 ++ [_]u8{0x7f};
+    const over = [_]u8{ 0xff, 0xff } ++ @as([7]u8, @splat(0xff)) ++ [_]u8{0x7f};
     try testing.expectError(error.IntegerOverflow, read(&over));
 }
 

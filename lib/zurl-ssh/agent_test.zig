@@ -172,7 +172,7 @@ const FakeAgent = struct {
             try reader.interface.readSliceAll(body);
 
             var r: wire.Reader = .init(body);
-            switch (@as(agent.Id, @enumFromInt(try r.byte()))) {
+            switch (@as(agent.Id, @fromBackingInt(@intCast(try r.byte())))) {
                 .request_identities => try a.answerIdentities(&writer),
                 .sign_request => {
                     const asked_blob = try r.string();
@@ -199,7 +199,7 @@ const FakeAgent = struct {
         var w: wire.Writer = .init(&storage);
         try w.uint32(0);
         const body_at = w.at;
-        try w.byte(@intFromEnum(agent.Id.identities_answer));
+        try w.byte(@backingInt(agent.Id.identities_answer));
 
         var count: u32 = 0;
         if (a.script.list_rsa_first) count += 1;
@@ -234,7 +234,7 @@ const FakeAgent = struct {
         var w: wire.Writer = .init(&storage);
         try w.uint32(0);
         const body_at = w.at;
-        try w.byte(@intFromEnum(agent.Id.sign_response));
+        try w.byte(@backingInt(agent.Id.sign_response));
 
         var blob_storage: [128]u8 = undefined;
         var blob: wire.Writer = .init(&blob_storage);
@@ -251,7 +251,7 @@ const FakeAgent = struct {
         var w: wire.Writer = .init(&storage);
         try w.uint32(0);
         const body_at = w.at;
-        try w.byte(@intFromEnum(agent.Id.failure));
+        try w.byte(@backingInt(agent.Id.failure));
         return a.frameAndSend(writer, w.written(), body_at);
     }
 

@@ -56,14 +56,6 @@ pub const DialError = error{
     Canceled,
     /// The operating system returned something `std.Io` does not name.
     Unexpected,
-    /// `/etc/resolv.conf` holds a `search` line longer than the resolver
-    /// copies it into. See `resolv.zig`.
-    ///
-    /// **This is a refusal and not a recovery.** The lookup would write
-    /// past a 255 octet array, and the build a user runs makes that write
-    /// instead of a panic. Nothing about the name can avoid it, so the
-    /// dial stops here and the sentence names the file.
-    ResolverSearchListTooLong,
     /// `/etc/resolv.conf` holds `options attempts:0`, and the resolver
     /// divides by that value to get the wait of one attempt.
     ResolverAttemptsZero,
@@ -152,7 +144,7 @@ pub const Host = union(enum) {
         /// they wrote correctly.
         ///
         /// curl answers the same name with `CURLE_COULDNT_RESOLVE_HOST`,
-        /// exit 6. Measured against curl 8.21.0 with names of 253, 254,
+        /// exit 6. Checked against curl 8.21.0 with names of 253, 254,
         /// 255, and 300 characters, on `http` and on `ftp`.
         HostNameTooLong,
     };
@@ -163,23 +155,15 @@ pub const Host = union(enum) {
     /// RFC 1035 section 2.3.4 holds an encoded name to 255 octets. The
     /// encoding writes a length octet before each label and a zero octet
     /// at the end, so a written name with no trailing dot reaches that
-    /// bound at 253 characters. `std.Io.net.HostName.max_len` says 255,
-    /// which counts the written form as if it were the encoding, and is
-    /// two too many.
+    /// bound at 253 characters.
     ///
-    /// **Those two characters are a memory fault, not a rounding error.**
-    /// The resolver in `std.Io.Threaded` copies the name into a buffer of
-    /// `std.Io.net.HostName.max_len` octets and then writes one more
-    /// octet for a dot. A name of 255 characters fills the buffer, and
-    /// the dot lands one past its end. A name of 254 characters reaches a
-    /// failed assertion deeper in the same resolver. Neither fault stops
-    /// a build that carries no safety checks: the write happens.
-    ///
-    /// A server picks the name, because a `Location` header does. So the
-    /// bound belongs here, above `std`, and not in the caller.
-    ///
-    /// Measured against Zig 0.16.0: 253 characters and fewer resolve, 254
-    /// and 255 both fault.
+    /// Zig 0.17.0 agrees: `std.Io.net.HostName.max_len` is 254 and keeps
+    /// the last octet for the dot its resolver appends. Zig 0.16.0 said
+    /// 255 and let that dot land one past the buffer, which is the fault
+    /// this constant was written to stop. The bound stays because a
+    /// server picks the name, through a `Location` header, and because a
+    /// caller needs `HostNameTooLong` and not whatever name `std` gives
+    /// the fault.
     pub const max_name_len = 253;
 
     /// The written name with one trailing dot removed.
@@ -226,9 +210,7 @@ pub const Host = union(enum) {
     /// `std.Io` to turn the interface name into an index, which this
     /// function does not take.
     /// A name longer than `max_name_len` gets `HostNameTooLong`, which is
-    /// a different fault. See that constant: `std` accepts two characters
-    /// more than the encoding holds, and its resolver writes past a
-    /// buffer for them.
+    /// a different fault.
     pub fn init(text: []const u8) InitError!Host {
         if (std.Io.net.IpAddress.parse(text, 0)) |address| {
             return .{ .address = address };
@@ -748,7 +730,6 @@ fn mapConnectError(err: TaskError) DialError {
         // this name without leaving a buffer. Each one keeps its own
         // name, because each one names a different line of the file.
         // See `resolv.zig`.
-        error.ResolverSearchListTooLong => error.ResolverSearchListTooLong,
         error.ResolverAttemptsZero => error.ResolverAttemptsZero,
         error.ResolverSearchNameTooLong => error.ResolverSearchNameTooLong,
 
@@ -1166,22 +1147,16 @@ fn lateConnectTask(io: std.Io, port: u16) TaskError!std.Io.net.Stream {
 }
 
 test "a name longer than the encoding holds is refused before a resolver sees it" {
-    // **`std` accepts two characters more than an encoded name holds, and
-    // its resolver writes past a buffer for them.** See
-    // `Host.max_name_len`. The fault is not a panic in a shipped build,
-    // where the safety checks are gone, so the bound has to sit here.
-    //
-    // A server picks the name. `zurl -L` with an answer of
-    // `Location: http://<255 characters>/` reached the write, measured
-    // against a build with the checks on.
+    // A server picks the name, because a `Location` header does, so the
+    // bound sits here and not in the caller. See `Host.max_name_len`.
     var name: [255]u8 = undefined;
     for (&name, 0..) |*byte, i| byte.* = if ((i + 1) % 64 == 0) '.' else 'a';
 
     // 253 is the longest an encoded name holds, so it resolves.
     _ = try Host.init(name[0..253]);
 
-    // 254 reaches a failed assertion in the resolver, and 255 writes one
-    // octet past the end of its buffer. Both stop here instead.
+    // Neither of the next two has an encoding a resolver can send, so
+    // both stop here.
     //
     // **The name they get is not `InvalidHost`.** Every character of
     // these two is one a host name allows, so the url is well formed and
@@ -1405,14 +1380,10 @@ test "one family with no address does not fail a dial the other family can make"
 }
 
 test "a resolver configuration the lookup cannot use is a resolve fault" {
-    // The three refusals of `resolv.zig` reach a user as exit 6, the same
-    // as any other name that did not resolve, because that is what a
-    // script must act on. The sentence is what says the file is the
-    // reason, and `errors.zig` holds it.
-    try testing.expectEqual(
-        DialError.ResolverSearchListTooLong,
-        mapConnectError(error.ResolverSearchListTooLong),
-    );
+    // Both refusals of `resolv.zig` reach a user as exit 6, the same as
+    // any other name that did not resolve, because that is what a script
+    // must act on. The sentence is what says the file is the reason, and
+    // `errors.zig` holds it.
     try testing.expectEqual(
         DialError.ResolverAttemptsZero,
         mapConnectError(error.ResolverAttemptsZero),

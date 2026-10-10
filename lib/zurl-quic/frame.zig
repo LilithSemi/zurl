@@ -1201,7 +1201,7 @@ test "a NEW_TOKEN frame with an empty token is refused" {
 }
 
 test "a NEW_CONNECTION_ID frame outside the rules of section 19.15 is refused" {
-    const token = [_]u8{0} ** 16;
+    const token: [16]u8 = @splat(0);
     // Retire Prior To above the Sequence Number.
     var bytes = [_]u8{ 0x18, 0x01, 0x02, 0x04, 0xaa, 0xbb, 0xcc, 0xdd } ++ token;
     try testing.expectError(error.BadConnectionId, decodeOne(&bytes));
@@ -1211,7 +1211,7 @@ test "a NEW_CONNECTION_ID frame outside the rules of section 19.15 is refused" {
     try testing.expectError(error.BadConnectionId, decodeOne(&bytes));
 
     // A length of 21, which is past the cap of RFC 9000 section 17.2.
-    var long = [_]u8{ 0x18, 0x02, 0x01, 21 } ++ ([_]u8{0xaa} ** 21) ++ token;
+    var long = [_]u8{ 0x18, 0x02, 0x01, 21 } ++ @as([21]u8, @splat(0xaa)) ++ token;
     try testing.expectError(error.BadConnectionId, decodeOne(&long));
 
     // A length of 255, which is what a peer writes to make a reader run

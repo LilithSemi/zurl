@@ -690,8 +690,9 @@ test "the allocation fits the value with nothing left over" {
     // A buffer measured from the credential, and not from a constant, is
     // the whole point of this module's sizing. `basicValueSize` reports
     // the buffer, which holds the value and the raw form beside it.
-    const c: auth.Credentials = .{ .user = "cache", .password = "a" ** long_token_len };
-    var v = (try applied(parseUrl("http://cache:" ++ "a" ** long_token_len ++ "@example.com/"), .{}, null, no_detail)).?;
+    const token: [long_token_len]u8 = @splat('a');
+    const c: auth.Credentials = .{ .user = "cache", .password = &token };
+    var v = (try applied(parseUrl("http://cache:" ++ token ++ "@example.com/"), .{}, null, no_detail)).?;
     defer v.deinit(testing.allocator);
     try testing.expectEqual(auth.basicValueSize(c), v.storage.len);
     try testing.expectEqual(auth.basicValueLen(c), v.text.len);

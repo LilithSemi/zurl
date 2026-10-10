@@ -169,10 +169,10 @@ test "--limit-rate slows a transfer measurably" {
     // it, however fast it is, because the wait comes from the clock. An
     // upper bound would fail on a loaded machine for no fault of zurl's.
     const rate = 4096;
-    const body = "x" ** 12288;
+    const body: [12288]u8 = @splat('x');
 
     var server: test_server.TestServer = undefined;
-    try server.start(&.{ok(body)});
+    try server.start(&.{ok(&body)});
     defer server.stop();
 
     const url = try loopbackUrl(&server);
@@ -187,7 +187,7 @@ test "--limit-rate slows a transfer measurably" {
     try testing.expectEqual(std.process.Child.Term{ .exited = 0 }, result.term);
     // The throttle must not lose or duplicate a byte while it waits.
     try testing.expectEqual(@as(usize, body.len), result.stdout.len);
-    try testing.expectEqualStrings(body, result.stdout);
+    try testing.expectEqualStrings(&body, result.stdout);
 
     const floor_ns: i96 = 1 * std.time.ns_per_s;
     if (elapsed.nanoseconds < floor_ns) {
@@ -2120,12 +2120,12 @@ test "a Secure cookie crosses the loopback and never a cleartext hop elsewhere" 
 /// dashes and blanks what follows. Nothing else in a form body holds that
 /// many dashes in a row.
 fn normalizeBoundary(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
-    const dashes = "-" ** 24;
+    const dashes: [24]u8 = @splat('-');
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
     var rest = body;
-    while (std.mem.indexOf(u8, rest, dashes)) |at| {
+    while (std.mem.indexOf(u8, rest, &dashes)) |at| {
         // The delimiter writes two more dashes in front of the boundary,
         // so walk back over every dash this run of them holds.
         var start = at;
@@ -3050,7 +3050,8 @@ test "a telnet body reaches the peer with every IAC octet doubled" {
 test "a tftp url downloads the whole file through the installed binary" {
     // Three blocks, so the block acknowledgement and the short last block
     // both run inside the real binary and not only inside a unit test.
-    const payload = "tftp payload " ** 100;
+    const line = "tftp payload ";
+    const payload = std.mem.sliceAsBytes(&@as([100][line.len]u8, @splat(line.*)));
     var server: zurl_tftp.test_server.Server = undefined;
     try server.start(.{ .file = payload });
     defer server.stop();
@@ -3077,7 +3078,8 @@ test "an ftp url downloads the whole file through the installed binary" {
     // The whole path through the binary: the flag parser, the client, the
     // dispatch table, and `zurl-ftp`. The command order is curl's own,
     // measured against curl 8.21.0 on a loopback RFC 959 server.
-    const payload = "ftp payload line\n" ** 40;
+    const line = "ftp payload line\n";
+    const payload = std.mem.sliceAsBytes(&@as([40][line.len]u8, @splat(line.*)));
     var server: zurl_ftp.test_server.Server = undefined;
     try server.start(.{ .body = payload });
     defer server.stop();
@@ -5871,7 +5873,8 @@ test "a redirect to a name longer than the encoding holds stops without a memory
     //
     // `zurl_net.tcp.Host.max_name_len` refuses both before `std` sees
     // them. See that constant for why 253 is the real bound.
-    const long_name = ("a" ** 63) ++ "." ++ ("a" ** 63) ++ "." ++ ("a" ** 63) ++ "." ++ ("a" ** 63);
+    const label: [63]u8 = @splat('a');
+    const long_name = label ++ "." ++ label ++ "." ++ label ++ "." ++ label;
     try testing.expectEqual(@as(usize, 255), long_name.len);
 
     var server: test_server.TestServer = undefined;

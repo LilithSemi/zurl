@@ -48,8 +48,8 @@ pub fn name(a: Algorithm) []const u8 {
 
 /// The algorithm `text` names, or null.
 pub fn fromName(text: []const u8) ?Algorithm {
-    inline for (@typeInfo(Algorithm).@"enum".fields) |field| {
-        const candidate: Algorithm = @enumFromInt(field.value);
+    inline for (@typeInfo(Algorithm).@"enum".field_names) |field_name| {
+        const candidate: Algorithm = @field(Algorithm, field_name);
         if (std.mem.eql(u8, text, name(candidate))) return candidate;
     }
     return null;

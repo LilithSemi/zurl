@@ -65,7 +65,7 @@ pub const IdError = error{
 /// unidirectional stream a client opens is 2.
 pub fn makeId(initiator: Initiator, kind: Kind, number: u64) IdError!u64 {
     if (number > max_number) return error.StreamNumberTooLarge;
-    const low: u64 = @as(u64, @intFromEnum(initiator)) | switch (kind) {
+    const low: u64 = @as(u64, @backingInt(initiator)) | switch (kind) {
         .bidirectional => @as(u64, 0),
         .unidirectional => @as(u64, 2),
     };

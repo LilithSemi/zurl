@@ -90,7 +90,7 @@ test {
 test "the package offers only the three suites RFC 9001 gives header protection" {
     const quic = @import("zurl-quic");
     try std.testing.expectEqual(@as(usize, 3), Handshake.offered_suites.len);
-    const secret = [_]u8{0x01} ** 48;
+    const secret: [48]u8 = @splat(0x01);
     for (Handshake.offered_suites) |suite| {
         // Each one has a header protection rule in RFC 9001 sections
         // 5.4.3 and 5.4.4, which is what a header mask needs.

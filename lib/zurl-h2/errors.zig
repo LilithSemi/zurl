@@ -43,13 +43,13 @@ pub const ErrorCode = enum(u32) {
 
     /// The code as it goes on the wire.
     pub fn int(code: ErrorCode) u32 {
-        return @intFromEnum(code);
+        return @backingInt(code);
     }
 
     /// Reads a code off the wire. Every 32-bit value is accepted, because
     /// section 7 says an unknown code must not change behaviour.
     pub fn fromInt(value: u32) ErrorCode {
-        return @enumFromInt(value);
+        return @fromBackingInt(@intCast(value));
     }
 
     /// True when this build knows the code.
@@ -323,8 +323,8 @@ test "every error in the set has a classification on stream 0 and on a stream" {
     // fails the build rather than falling into a default. This walks the
     // set anyway, to prove no arm returns a code this build does not
     // know.
-    inline for (@typeInfo(Error).error_set.?) |e| {
-        const err = @field(anyerror, e.name);
+    inline for (@typeInfo(Error).error_set.error_names.?) |name| {
+        const err = @field(anyerror, name);
         for ([_]u31{ 0, 1 }) |stream_id| {
             const fault = classify(@errorCast(err), stream_id);
             try testing.expect(fault.code.isKnown());

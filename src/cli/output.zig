@@ -1164,8 +1164,8 @@ test "nameFromUrl writes curl 8.21.0's own escaped names literally" {
 test "every name fault has a fault code and a sentence" {
     // A new member of `NameError` with no row here would reach the user as
     // a silent exit or a bare error name.
-    inline for (@typeInfo(NameError).error_set.?) |field| {
-        const err = @field(NameError, field.name);
+    inline for (@typeInfo(NameError).error_set.error_names.?) |name| {
+        const err = @field(NameError, name);
         const code = zurl_core.errors.curlCode(faultFor(err));
         try testing.expect(code == 3 or code == 23);
         try testing.expect(explain(err).len > 0);
@@ -1524,7 +1524,7 @@ test "-J finds no name where curl 8.21.0 finds none" {
     try expectNoHeaderName("attachment; filename=\"dir/\"");
     // Past the bound this file keeps. The header is the server's, so its
     // length is the server's choice.
-    const long = "attachment; filename=\"" ++ "x" ** max_disposition_len ++ "\"";
+    const long = "attachment; filename=\"" ++ @as([max_disposition_len]u8, @splat('x')) ++ "\"";
     try expectNoHeaderName(long);
 }
 
@@ -1600,19 +1600,20 @@ test "-J never hands checkName a name that is still a path" {
 test "-J refuses a header name past the length bound" {
     // A name that survived the path cut is still judged by `checkName`,
     // and that is where the length bound lives. One rule, both flags.
-    const long = "attachment; filename=\"" ++ "x" ** (max_name_len + 1) ++ "\"";
+    const long = "attachment; filename=\"" ++ @as([max_name_len + 1]u8, @splat('x')) ++ "\"";
     try testing.expectError(error.NameTooLong, nameFromDisposition(long));
 
     // And exactly at the bound it writes.
-    const edge = "attachment; filename=\"" ++ "x" ** max_name_len ++ "\"";
-    try expectHeaderName(edge, "x" ** max_name_len);
+    const name: [max_name_len]u8 = @splat('x');
+    const edge = "attachment; filename=\"" ++ name ++ "\"";
+    try expectHeaderName(edge, &name);
 }
 
 test "every -J name fault has a fault code and a sentence" {
     // The mirror of the `-O` guard above. A new `NameError` member with
     // no `-J` sentence would reach the user as a bare error name.
-    inline for (@typeInfo(NameError).error_set.?) |field| {
-        const err = @field(NameError, field.name);
+    inline for (@typeInfo(NameError).error_set.error_names.?) |name| {
+        const err = @field(NameError, name);
         try testing.expect(explainHeaderName(err).len > 0);
         try testing.expect(std.mem.startsWith(u8, explainHeaderName(err), "-J "));
     }

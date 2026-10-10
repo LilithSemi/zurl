@@ -588,7 +588,7 @@ fn run(
                 d,
                 error.ReadError,
                 "the tftp server sent opcode ",
-                @intFromEnum(opcode),
+                @backingInt(opcode),
                 ", which a download has no use for",
             ),
         }
@@ -1119,7 +1119,7 @@ test "a server that reads no option runs at 512 whatever the request asked for" 
     // first 512 byte block as the short block that ends the file, and the
     // download would stop with 512 of the 700 bytes.
     var server: test_server.Server = undefined;
-    try server.start(.{ .file = "a" ** 700, .answer_options = false });
+    try server.start(.{ .file = &@as([700]u8, @splat('a')), .answer_options = false });
     defer server.stop();
 
     var url_buffer: [64]u8 = undefined;
@@ -1141,7 +1141,7 @@ test "a block the network dropped is asked for again" {
     // The server drops the first copy of block 2. The client waits, sends
     // its `ack` for block 1 again, and the server answers with block 2.
     var server: test_server.Server = undefined;
-    try server.start(.{ .file = "a" ** 700, .drop_block = 2 });
+    try server.start(.{ .file = &@as([700]u8, @splat('a')), .drop_block = 2 });
     defer server.stop();
 
     var url_buffer: [64]u8 = undefined;
@@ -1167,9 +1167,9 @@ test "a block that arrives twice is acknowledged again and counted once" {
     // the duplicate arrives while the transfer is still running. A
     // duplicate of the last block could never be read: the transfer ends
     // on the short block that carries it.
-    const payload = "a" ** 600;
+    const payload: [600]u8 = @splat('a');
     var server: test_server.Server = undefined;
-    try server.start(.{ .file = payload, .duplicate_block = 1 });
+    try server.start(.{ .file = &payload, .duplicate_block = 1 });
     defer server.stop();
 
     var url_buffer: [64]u8 = undefined;
@@ -1183,7 +1183,7 @@ test "a block that arrives twice is acknowledged again and counted once" {
     defer testing.allocator.free(contents);
     // Six hundred bytes and not eleven hundred and twelve.
     try testing.expectEqual(@as(usize, 600), contents.len);
-    try testing.expectEqualStrings(payload, contents);
+    try testing.expectEqualStrings(&payload, contents);
     // Block 1 was acknowledged twice, and the file still holds it once.
     server.wait();
     try testing.expectEqualSlices(u16, &.{ 0, 1, 1, 2 }, server.acks());

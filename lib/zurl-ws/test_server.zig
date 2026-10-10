@@ -145,7 +145,7 @@ pub fn clientFrames(s: *const Server) usize {
 /// The opcode of client frame `index`.
 pub fn clientOpcode(s: *const Server, index: usize) frame.Opcode {
     std.debug.assert(index < s.clientFrames());
-    return @enumFromInt(@as(u4, @truncate(s.client_opcodes[index])));
+    return @fromBackingInt(@intCast(@as(u4, @truncate(s.client_opcodes[index]))));
 }
 
 /// Whether client frame `index` was masked.
@@ -331,7 +331,7 @@ fn readClientFrames(s: *Server, reader: *std.Io.Reader) void {
         zurl_net.bounded.readExact(reader, testing.io, payload, read_stall) catch return;
         if (header.masked) frame.applyMask(payload, header.mask_key, 0);
 
-        s.client_opcodes[read] = @intFromEnum(header.opcode);
+        s.client_opcodes[read] = @backingInt(header.opcode);
         s.client_masked[read] = header.masked;
         s.client_mask_keys[read] = header.mask_key;
         s.client_payload_at[read] = at;

@@ -286,7 +286,7 @@ const Wire = struct {
         at += message.payload.len;
 
         try w.sendPacket(
-            @intFromEnum(packet.Type.publish),
+            @backingInt(packet.Type.publish),
             @as(u4, message.qos) << 1,
             body[0..at],
         );
@@ -297,9 +297,9 @@ fn serve(w: *Wire) !void {
     const script = w.s.script;
 
     const connect = try w.read();
-    if (connect.kind != @intFromEnum(packet.Type.connect)) return;
+    if (connect.kind != @backingInt(packet.Type.connect)) return;
     try w.sendPacket(
-        script.connack_type orelse @intFromEnum(packet.Type.connack),
+        script.connack_type orelse @backingInt(packet.Type.connack),
         0,
         &.{ 0x00, script.connack_code },
     );
@@ -307,7 +307,7 @@ fn serve(w: *Wire) !void {
 
     while (true) {
         const next = w.read() catch return;
-        switch (@as(packet.Type, @enumFromInt(next.kind))) {
+        switch (@as(packet.Type, @fromBackingInt(@intCast(next.kind)))) {
             .publish => {
                 // A QoS 0 publish is acknowledged by nothing at all,
                 // which is what this build sends.
@@ -318,7 +318,7 @@ fn serve(w: *Wire) !void {
                 var answer: [3]u8 = undefined;
                 std.mem.writeInt(u16, answer[0..2], id, .big);
                 answer[2] = script.suback_code;
-                try w.sendPacket(@intFromEnum(packet.Type.suback), 0, &answer);
+                try w.sendPacket(@backingInt(packet.Type.suback), 0, &answer);
                 if (script.suback_code == 0x80) return;
 
                 if (script.raw_after_suback) |bytes| {
@@ -335,7 +335,7 @@ fn serve(w: *Wire) !void {
 
                 var pings: u32 = 0;
                 while (pings < script.pingresps_before_messages) : (pings += 1) {
-                    try w.sendPacket(@intFromEnum(packet.Type.pingresp), 0, &.{});
+                    try w.sendPacket(@backingInt(packet.Type.pingresp), 0, &.{});
                 }
 
                 for (script.messages) |message| try w.sendMessage(message);

@@ -750,13 +750,13 @@ test "a field section past the byte bound is refused" {
     // A literal field line with a literal name of one octet and no value
     // costs 33 bytes. Three fit in 100 and four do not.
     const one = [_]u8{ 0x21, 'a', 0x00 };
-    var section = try decoder.decodeSection(gpa, &([_]u8{ 0x00, 0x00 } ++ one ** 3));
+    var section = try decoder.decodeSection(gpa, &([_]u8{ 0x00, 0x00 } ++ one ++ one ++ one));
     defer section.deinit(gpa);
     try testing.expectEqual(@as(usize, 99), section.list.size);
 
     try testing.expectError(
         error.HeaderListTooLarge,
-        decoder.decodeSection(gpa, &([_]u8{ 0x00, 0x00 } ++ one ** 4)),
+        decoder.decodeSection(gpa, &([_]u8{ 0x00, 0x00 } ++ one ++ one ++ one ++ one)),
     );
 }
 
@@ -767,12 +767,12 @@ test "one long string is refused against the same byte bound" {
 
     // The budget for one field line is 100 less the 32 bytes of overhead.
     // A name of 60 leaves 8, which a value of 20 does not fit.
-    const split = [_]u8{ 0x00, 0x00, 0x27, 53 } ++ [_]u8{'a'} ** 60 ++
-        [_]u8{20} ++ [_]u8{'b'} ** 20;
+    const split = [_]u8{ 0x00, 0x00, 0x27, 53 } ++ @as([60]u8, @splat('a')) ++
+        [_]u8{20} ++ @as([20]u8, @splat('b'));
     try testing.expectError(error.HeaderListTooLarge, decoder.decodeSection(gpa, &split));
 
     // A name of 200 is past the whole budget on its own.
-    const single = [_]u8{ 0x00, 0x00, 0x27, 0xc1, 0x01 } ++ [_]u8{'a'} ** 200 ++ [_]u8{0};
+    const single = [_]u8{ 0x00, 0x00, 0x27, 0xc1, 0x01 } ++ @as([200]u8, @splat('a')) ++ [_]u8{0};
     try testing.expectError(error.HeaderListTooLarge, decoder.decodeSection(gpa, &single));
 }
 
@@ -781,13 +781,16 @@ test "a field section past the field count is refused" {
     var decoder: Decoder = .init(.{ .field_count_max = 4 });
     defer decoder.deinit(gpa);
 
-    var section = try decoder.decodeSection(gpa, &([_]u8{ 0x00, 0x00 } ++ [_]u8{0xd1} ** 4));
+    var section = try decoder.decodeSection(
+        gpa,
+        &([_]u8{ 0x00, 0x00 } ++ @as([4]u8, @splat(0xd1))),
+    );
     defer section.deinit(gpa);
     try testing.expectEqual(@as(usize, 4), section.list.fields.items.len);
 
     try testing.expectError(
         error.TooManyHeaderFields,
-        decoder.decodeSection(gpa, &([_]u8{ 0x00, 0x00 } ++ [_]u8{0xd1} ** 5)),
+        decoder.decodeSection(gpa, &([_]u8{ 0x00, 0x00 } ++ @as([5]u8, @splat(0xd1)))),
     );
 }
 
@@ -806,7 +809,7 @@ test "a decompression bomb stops at the byte bound" {
     defer seed.deinit(gpa);
     try seed.appendSlice(gpa, &.{ 0x3f, 0xe1, 0x1f });
     try seed.appendSlice(gpa, &.{ 0x41, 'a', 0x7f, 0xa1, 0x1e });
-    try seed.appendSlice(gpa, &([_]u8{'x'} ** 4000));
+    try seed.appendSlice(gpa, &@as([4000]u8, @splat('x')));
     _ = try decoder.readEncoderStream(gpa, seed.items);
     try testing.expectEqual(@as(usize, 4033), decoder.table.size);
 
@@ -816,14 +819,14 @@ test "a decompression bomb stops at the byte bound" {
     var bomb: std.ArrayList(u8) = .empty;
     defer bomb.deinit(gpa);
     try bomb.appendSlice(gpa, &.{ 0x02, 0x00 });
-    try bomb.appendSlice(gpa, &([_]u8{0x80} ** 200));
+    try bomb.appendSlice(gpa, &@as([200]u8, @splat(0x80)));
 
     try testing.expectError(error.HeaderListTooLarge, decoder.decodeSection(gpa, bomb.items));
 }
 
 test "an integer that never ends is refused, whichever representation carries it" {
     const gpa = testing.allocator;
-    const forever = [_]u8{0x80} ** 32;
+    const forever: [32]u8 = @splat(0x80);
     inline for ([_]u8{ 0xff, 0x7f, 0x3f, 0x1f, 0x0f }) |first| {
         try testing.expectError(
             error.IntegerTooLong,
@@ -840,7 +843,7 @@ test "an integer that never ends is refused, whichever representation carries it
 
 test "an index larger than this build holds is refused before it wraps" {
     const gpa = testing.allocator;
-    const over = [_]u8{ 0x00, 0x00, 0xff, 0xff } ++ [_]u8{0xff} ** 7 ++ [_]u8{0x7f};
+    const over = [_]u8{ 0x00, 0x00, 0xff, 0xff } ++ @as([7]u8, @splat(0xff)) ++ [_]u8{0x7f};
     try testing.expectError(error.IntegerOverflow, decodeOnce(gpa, &over));
 }
 

@@ -531,7 +531,7 @@ test "an instruction longer than the bound is a fault and not a wait" {
     // and then stops after 100. The name fits the table, so the length is
     // legal and the wait is legal, but the octets held reach past the
     // bound. A decoder that kept waiting would hold this for ever.
-    const partial = [_]u8{ 0x5f, 0x77 } ++ [_]u8{'a'} ** 100;
+    const partial = [_]u8{ 0x5f, 0x77 } ++ @as([100]u8, @splat('a'));
     try testing.expectError(
         error.InstructionTooLong,
         apply(gpa, &table, &partial, .{ .instruction_len_max = 50 }),
@@ -541,7 +541,7 @@ test "an instruction longer than the bound is a fault and not a wait" {
     // has room for 188, and 1032 Huffman octets cannot decode to fewer
     // than 275, so this one is refused on the octet that finishes the
     // length and never waits at all.
-    const impossible = [_]u8{ 0x7f, 0xe9, 0x07 } ++ [_]u8{'a'} ** 200;
+    const impossible = [_]u8{ 0x7f, 0xe9, 0x07 } ++ @as([200]u8, @splat('a'));
     try testing.expectError(
         error.EntryTooLarge,
         apply(gpa, &table, &impossible, .{ .instruction_len_max = 100 }),
@@ -654,7 +654,7 @@ test "an integer that never ends is refused, whichever instruction carries it" {
     var table = try exampleTable(gpa);
     defer table.deinit(gpa);
 
-    const forever = [_]u8{0x80} ** 32;
+    const forever: [32]u8 = @splat(0x80);
     inline for ([_]u8{ 0xff, 0x7f, 0x3f, 0x1f }) |first| {
         try testing.expectError(
             error.IntegerTooLong,
@@ -749,7 +749,7 @@ test "a value length no table can hold is a fault at once, not a decode per octe
     try stream.appendSlice(gpa, string.encode(
         insert_literal_name_prefix_bits,
         insert_literal_pattern,
-        "a" ** 4000,
+        &@as([4000]u8, @splat('a')),
         .huffman_when_shorter,
         &out,
     ));
@@ -764,7 +764,7 @@ test "a value length no table can hold is a fault at once, not a decode per octe
         &value_header,
     ));
     // What the peer drips after it, one QUIC STREAM frame per octet.
-    try stream.appendSlice(gpa, &([_]u8{'x'} ** 256));
+    try stream.appendSlice(gpa, &@as([256]u8, @splat('x')));
 
     var counted: std.testing.FailingAllocator = .init(gpa, .{});
     var table: DynamicTable = .init(.{ .capacity_max = 4096 });

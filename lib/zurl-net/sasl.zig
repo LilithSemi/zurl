@@ -124,7 +124,7 @@ pub const Mechanism = enum {
 /// A set and not a list, because the three protocols write the list three
 /// ways and a caller only ever asks whether one mechanism is in it.
 pub const Offer = struct {
-    set: std.EnumSet(Mechanism) = .initEmpty(),
+    set: std.EnumSet(Mechanism) = .empty,
     /// Whether the server named a mechanism at all, this build's own
     /// included.
     ///

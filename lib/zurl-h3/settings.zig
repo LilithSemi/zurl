@@ -139,7 +139,7 @@ pub fn decode(payload: []const u8) Error!Settings {
         seen[seen_len] = id_field.value;
         seen_len += 1;
 
-        switch (@as(Id, @enumFromInt(id_field.value))) {
+        switch (@as(Id, @fromBackingInt(@intCast(id_field.value)))) {
             .qpack_max_table_capacity => out.qpack_max_table_capacity = value_field.value,
             .max_field_section_size => out.max_field_section_size = value_field.value,
             .qpack_blocked_streams => out.qpack_blocked_streams = value_field.value,
@@ -166,7 +166,7 @@ pub fn encodedLen(s: Settings) usize {
 }
 
 fn pairLen(id: Id, value: u64) usize {
-    const id_len = varint.encodedLen(@intFromEnum(id)) catch unreachable;
+    const id_len = varint.encodedLen(@backingInt(id)) catch unreachable;
     const value_len = varint.encodedLen(value) catch unreachable;
     return id_len + value_len;
 }
@@ -189,7 +189,7 @@ pub fn encode(s: Settings, out: []u8) []u8 {
 
 fn writePair(id: Id, value: u64, out: []u8) usize {
     var scratch: [varint.max_bytes]u8 = undefined;
-    const id_bytes = varint.encode(&scratch, @intFromEnum(id)) catch unreachable;
+    const id_bytes = varint.encode(&scratch, @backingInt(id)) catch unreachable;
     @memcpy(out[0..id_bytes.len], id_bytes);
     var at = id_bytes.len;
     const value_bytes = varint.encode(&scratch, value) catch unreachable;
@@ -239,7 +239,7 @@ test "an identifier is read by its value and never by its bytes" {
 
     // A known identifier spelled wide is still the identifier it names.
     {
-        const bytes = wideVarint(&wide, varint.max_bytes, @intFromEnum(Id.max_field_section_size));
+        const bytes = wideVarint(&wide, varint.max_bytes, @backingInt(Id.max_field_section_size));
         var payload: [varint.max_bytes + 2]u8 = undefined;
         @memcpy(payload[0..bytes.len], bytes);
         payload[bytes.len] = 0x44;
@@ -265,7 +265,7 @@ test "an identifier is read by its value and never by its bytes" {
     // And the duplicate rule compares values as well: one byte and then
     // eight bytes naming 0x06 is the same identifier twice.
     {
-        const bytes = wideVarint(&wide, varint.max_bytes, @intFromEnum(Id.max_field_section_size));
+        const bytes = wideVarint(&wide, varint.max_bytes, @backingInt(Id.max_field_section_size));
         var payload: [varint.max_bytes + 3]u8 = undefined;
         payload[0] = 0x06;
         payload[1] = 0x00;

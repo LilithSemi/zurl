@@ -102,7 +102,16 @@ pub fn runZurlIn(dir: Io.Dir, args: []const []const u8) !std.process.RunResult {
     var empty_env: std.process.Environ.Map = .init(testing.allocator);
     defer empty_env.deinit();
 
+    // `exe_path` is relative to the directory the suite runs in, and the
+    // child gets `dir` instead, so the binary is named against a handle
+    // for that directory and not through `argv[0]`. The handle has to be
+    // an open one: `Io.Dir.cwd()` is read after the child changes
+    // directory, and names nothing from in there.
+    var suite_dir = try Io.Dir.cwd().openDir(testing.io, ".", .{});
+    defer suite_dir.close(testing.io);
+
     return std.process.run(testing.allocator, testing.io, .{
+        .exe = .{ .explicit = .{ .dir = suite_dir, .path = build_options.exe_path } },
         .argv = argv.items,
         .environ_map = &empty_env,
         .cwd = .{ .dir = dir },

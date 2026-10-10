@@ -64,7 +64,7 @@ pub const Code = enum(u64) {
             .qpack_decompression_failed => "QPACK_DECOMPRESSION_FAILED",
             .qpack_encoder_stream_error => "QPACK_ENCODER_STREAM_ERROR",
             .qpack_decoder_stream_error => "QPACK_DECODER_STREAM_ERROR",
-            _ => if (isReserved(@intFromEnum(self))) "RESERVED" else "UNKNOWN",
+            _ => if (isReserved(@backingInt(self))) "RESERVED" else "UNKNOWN",
         };
     }
 };
@@ -82,12 +82,12 @@ pub fn isReserved(value: u64) bool {
 const testing = std.testing;
 
 test "every code RFC 9114 table 5 lists has the number the table gives it" {
-    try testing.expectEqual(@as(u64, 0x0100), @intFromEnum(Code.no_error));
-    try testing.expectEqual(@as(u64, 0x0105), @intFromEnum(Code.frame_unexpected));
-    try testing.expectEqual(@as(u64, 0x0109), @intFromEnum(Code.settings_error));
-    try testing.expectEqual(@as(u64, 0x010a), @intFromEnum(Code.missing_settings));
-    try testing.expectEqual(@as(u64, 0x010e), @intFromEnum(Code.message_error));
-    try testing.expectEqual(@as(u64, 0x0110), @intFromEnum(Code.version_fallback));
+    try testing.expectEqual(@as(u64, 0x0100), @backingInt(Code.no_error));
+    try testing.expectEqual(@as(u64, 0x0105), @backingInt(Code.frame_unexpected));
+    try testing.expectEqual(@as(u64, 0x0109), @backingInt(Code.settings_error));
+    try testing.expectEqual(@as(u64, 0x010a), @backingInt(Code.missing_settings));
+    try testing.expectEqual(@as(u64, 0x010e), @backingInt(Code.message_error));
+    try testing.expectEqual(@as(u64, 0x0110), @backingInt(Code.version_fallback));
     try testing.expectEqualStrings("H3_MISSING_SETTINGS", Code.missing_settings.name());
 }
 
@@ -95,8 +95,8 @@ test "the three QPACK codes share the HTTP/3 space" {
     // RFC 9204 section 6 puts them at 0x0200, which is outside the
     // 0x0100 block RFC 9114 uses and inside the same application code
     // space.
-    try testing.expectEqual(@as(u64, 0x0200), @intFromEnum(Code.qpack_decompression_failed));
-    try testing.expectEqual(@as(u64, 0x0202), @intFromEnum(Code.qpack_decoder_stream_error));
+    try testing.expectEqual(@as(u64, 0x0200), @backingInt(Code.qpack_decompression_failed));
+    try testing.expectEqual(@as(u64, 0x0202), @backingInt(Code.qpack_decoder_stream_error));
     try testing.expectEqualStrings("QPACK_ENCODER_STREAM_ERROR", Code.qpack_encoder_stream_error.name());
 }
 
@@ -108,6 +108,6 @@ test "the reserved pattern names the numbers RFC 9114 says it does" {
     try testing.expect(!isReserved(0x22));
     try testing.expect(!isReserved(0x00));
     try testing.expect(!isReserved(0x20));
-    try testing.expectEqualStrings("RESERVED", @as(Code, @enumFromInt(0x21)).name());
-    try testing.expectEqualStrings("UNKNOWN", @as(Code, @enumFromInt(0x22)).name());
+    try testing.expectEqualStrings("RESERVED", @as(Code, @fromBackingInt(@intCast(0x21))).name());
+    try testing.expectEqualStrings("UNKNOWN", @as(Code, @fromBackingInt(@intCast(0x22))).name());
 }

@@ -208,7 +208,7 @@ fn writeBody(
     send_options: bool,
     block_size: u16,
 ) std.Io.Writer.Error!void {
-    try w.writeInt(u16, @intFromEnum(Opcode.read_request), .big);
+    try w.writeInt(u16, @backingInt(Opcode.read_request), .big);
     try w.writeAll(filename);
     try w.writeByte(0);
     try w.writeAll(mode.text());
@@ -230,7 +230,7 @@ fn writeBody(
 /// Four bytes: the opcode 4, then the block number, both big endian. RFC
 /// 1350 section 5.
 pub fn writeAck(out: *[4]u8, block: u16) []const u8 {
-    std.mem.writeInt(u16, out[0..2], @intFromEnum(Opcode.ack), .big);
+    std.mem.writeInt(u16, out[0..2], @backingInt(Opcode.ack), .big);
     std.mem.writeInt(u16, out[2..4], block, .big);
     return out;
 }
@@ -279,7 +279,7 @@ pub const ParseError = error{
 /// result.
 pub fn parse(datagram: []const u8, requested_block_size: u16) ParseError!Incoming {
     if (datagram.len < 2) return error.Truncated;
-    const opcode: Opcode = @enumFromInt(std.mem.readInt(u16, datagram[0..2], .big));
+    const opcode: Opcode = @fromBackingInt(@intCast(std.mem.readInt(u16, datagram[0..2], .big)));
     switch (opcode) {
         .data => {
             if (datagram.len < 4) return error.Truncated;
@@ -290,7 +290,7 @@ pub fn parse(datagram: []const u8, requested_block_size: u16) ParseError!Incomin
         },
         .err => {
             if (datagram.len < 4) return error.Truncated;
-            const code: ErrorCode = @enumFromInt(std.mem.readInt(u16, datagram[2..4], .big));
+            const code: ErrorCode = @fromBackingInt(@intCast(std.mem.readInt(u16, datagram[2..4], .big)));
             // The message is NUL terminated. A server that left the NUL
             // off is still a server whose message a user should read, so
             // the rest of the datagram is the message in that case.
@@ -506,7 +506,7 @@ test "every RFC 1350 error code carries curl's own exit code" {
         @as(u32, 71),
         zurl_core.errors.curlCode(errorFor(.option_negotiation_failed)),
     );
-    try testing.expectEqual(@as(u32, 71), zurl_core.errors.curlCode(errorFor(@enumFromInt(99))));
+    try testing.expectEqual(@as(u32, 71), zurl_core.errors.curlCode(errorFor(@fromBackingInt(@intCast(99)))));
 }
 
 test "an oack reads the options it names and skips the rest" {
@@ -591,7 +591,7 @@ test "an opcode a download cannot use is named and not guessed at" {
     const unknown = [_]u8{ 0, 99, 0, 1 };
     try testing.expectEqual(
         @as(u16, 99),
-        @intFromEnum((try parse(&unknown, default_block_size)).unusable),
+        @backingInt((try parse(&unknown, default_block_size)).unusable),
     );
 
     // A `read_request` from a server is the same answer.

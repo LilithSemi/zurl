@@ -50,7 +50,7 @@ comptime {
     // always contributes one more. This fact is decidable at compile time, so
     // a mismatch fails the build instead of relying on a runtime check that a
     // release build could remove.
-    const derived = @typeInfo(Inputs).@"struct".fields.len + 1;
+    const derived = @typeInfo(Inputs).@"struct".field_names.len + 1;
     if (derived != max_sources)
         @compileError("max_sources must equal Inputs field count plus one for .embedded");
 }

@@ -465,14 +465,14 @@ test "a message id of zero that is not an extended response is still a mismatch"
 
 test "the buffer grows for a larger message and is not shrunk for a smaller one" {
     // One long message and one short one. The second must not allocate.
-    const long_value = "z" ** 200;
+    const long_value: [200]u8 = @splat('z');
     // `30 81 d6` holds 214 bytes: the id, then a BindResponse of 208 whose
     // diagnostic is `04 81 c8` and 200 octets.
     const long = [_]u8{
         0x30, 0x81, 0xd6, 0x02, 0x01, 0x01, 0x61, 0x81,
         0xd0, 0x0a, 0x01, 0x00, 0x04, 0x00, 0x04, 0x81,
         0xc8,
-    } ++ long_value.*;
+    } ++ long_value;
     const short = [_]u8{
         0x30, 0x0c, 0x02, 0x01, 0x01, 0x61, 0x07,
         0x0a, 0x01, 0x00, 0x04, 0x00, 0x04, 0x00,
@@ -483,7 +483,7 @@ test "the buffer grows for a larger message and is not shrunk for a smaller one"
     defer p.session.deinit();
 
     const first = try p.session.receive(1);
-    try testing.expectEqualStrings(long_value, (try message.result(first.op)).diagnostic);
+    try testing.expectEqualStrings(&long_value, (try message.result(first.op)).diagnostic);
     const grown = p.session.buffer.?.len;
     try testing.expect(grown >= long.len);
 

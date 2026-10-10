@@ -493,7 +493,7 @@ test "one bad file in a capath directory does not cost the transfer its other ro
         if (shape.unreadable) {
             var file = try tmp.dir.openFile(std.testing.io, shape.file_name, .{});
             defer file.close(std.testing.io);
-            try file.setPermissions(std.testing.io, @enumFromInt(0));
+            try file.setPermissions(std.testing.io, @fromBackingInt(@intCast(0)));
         }
 
         const path = try tmpDirPath(&tmp);

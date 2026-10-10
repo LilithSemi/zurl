@@ -114,7 +114,7 @@ pub const Space = enum(u2) {
 
     /// The array index for this space.
     pub fn index(self: Space) usize {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     /// The space a packet at `level` belongs to. RFC 9000 section 12.3

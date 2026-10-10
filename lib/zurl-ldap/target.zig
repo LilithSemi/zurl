@@ -322,9 +322,9 @@ test "every scope name curl accepts reaches the right number" {
     for (cases) |case| {
         try testing.expectEqual(case.scope, Scope.parse(case.text).?);
     }
-    try testing.expectEqual(@as(i32, 0), @intFromEnum(Scope.base));
-    try testing.expectEqual(@as(i32, 1), @intFromEnum(Scope.one));
-    try testing.expectEqual(@as(i32, 2), @intFromEnum(Scope.sub));
+    try testing.expectEqual(@as(i32, 0), @backingInt(Scope.base));
+    try testing.expectEqual(@as(i32, 1), @backingInt(Scope.one));
+    try testing.expectEqual(@as(i32, 2), @backingInt(Scope.sub));
 }
 
 test "a scope this build does not speak is refused by name" {

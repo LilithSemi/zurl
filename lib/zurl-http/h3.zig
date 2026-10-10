@@ -763,7 +763,7 @@ pub const Session = struct {
                 .abandon => abandon: {
                     self.conn.streams.stopSending(
                         slot,
-                        @intFromEnum(zurl_h3.ErrorCode.stream_creation_error),
+                        @backingInt(zurl_h3.ErrorCode.stream_creation_error),
                     );
                     break :abandon .abandoned;
                 },
@@ -1073,7 +1073,7 @@ pub const Session = struct {
     fn abort(self: *Session, err: Fault) void {
         self.broken = true;
         const code = connectionErrorCode(err) orelse return;
-        self.conn.close(@intFromEnum(code), "");
+        self.conn.close(@backingInt(code), "");
     }
 };
 
@@ -2052,7 +2052,7 @@ const Exchange = struct {
         if (!self.body_ended and !self.slot.recv_state.finished()) {
             session.conn.streams.stopSending(
                 self.slot,
-                @intFromEnum(zurl_h3.ErrorCode.request_cancelled),
+                @backingInt(zurl_h3.ErrorCode.request_cancelled),
             );
             session.conn.flush() catch {};
         }
@@ -2395,14 +2395,14 @@ test "a request body goes out as DATA frames behind the head" {
 }
 
 test "a body that arrives in many DATA frames reads back whole" {
-    const long = "0123456789" ** 300;
+    const long: [3000]u8 = @bitCast(@as([300][10]u8, @splat("0123456789".*)));
     var server: h3_test_server = undefined;
     try server.start(&.{.{
         .fields = &.{
             .{ .name = ":status", .value = "200" },
             .{ .name = "content-length", .value = "3000" },
         },
-        .body = long,
+        .body = &long,
         // Small frames, so the reader crosses a frame boundary many times
         // and crosses packet boundaries with them.
         .data_chunk = 64,
@@ -2419,7 +2419,7 @@ test "a body that arrives in many DATA frames reads back whole" {
 
     const body = try readBody(exchange);
     defer testing.allocator.free(body);
-    try testing.expectEqualStrings(long, body);
+    try testing.expectEqualStrings(&long, body);
     try exchange.check();
 }
 

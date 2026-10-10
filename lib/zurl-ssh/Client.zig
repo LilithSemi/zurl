@@ -430,7 +430,7 @@ test "the phase names every step, so a fault says which one stopped" {
     // A dial that failed and a login that failed carry different exit
     // codes, and a caller cannot tell them apart from the error alone:
     // both sets overlap. This enum is what it reads instead.
-    try testing.expectEqual(@as(usize, 4), @typeInfo(Phase).@"enum".fields.len);
+    try testing.expectEqual(@as(usize, 4), @typeInfo(Phase).@"enum".field_names.len);
 }
 
 test "the default port is the one RFC 4253 assigns" {

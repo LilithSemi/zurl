@@ -742,7 +742,7 @@ pub const SaveError = error{
 /// one where a target has no permissions at all, and `toMode` is the
 /// member the POSIX shape has. Those targets take the default.
 const jar_permissions: Io.File.Permissions = if (@hasDecl(Io.File.Permissions, "toMode"))
-    @enumFromInt(0o600)
+    @fromBackingInt(@intCast(0o600))
 else
     .default_file;
 

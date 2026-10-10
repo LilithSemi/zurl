@@ -797,7 +797,7 @@ fn runKexServer(s: *Server, received: ?[]const u8) !void {
 
     const init_payload = try s.recvPacket();
     var init_reader: wire.Reader = .init(init_payload);
-    if (try init_reader.byte() != @intFromEnum(messages.Id.kex_ecdh_init)) {
+    if (try init_reader.byte() != @backingInt(messages.Id.kex_ecdh_init)) {
         return error.FixtureEcdhInitExpected;
     }
     const client_public = try init_reader.string();
@@ -807,7 +807,7 @@ fn runKexServer(s: *Server, received: ?[]const u8) !void {
     // change the keys.
     var seed: [X25519.seed_length]u8 = @splat(0x60);
     seed[0] +%= @intCast(s.kex_count);
-    const pair = try X25519.KeyPair.generateDeterministic(seed);
+    const pair = X25519.KeyPair.generateDeterministic(seed);
     const shared = try X25519.scalarmult(pair.secret_key, client_public[0..kex.public_bytes].*);
 
     const exchange_hash = try s.buildExchangeHash(.{
@@ -818,8 +818,8 @@ fn runKexServer(s: *Server, received: ?[]const u8) !void {
         .shared_secret = &shared,
     });
 
-    const signed = if (s.script.forge_signature)
-        [_]u8{0x00} ** kex.hash_bytes
+    const signed: [kex.hash_bytes]u8 = if (s.script.forge_signature)
+        @splat(0x00)
     else
         exchange_hash;
     const signing_key = if (s.script.wrong_signing_key)
@@ -830,7 +830,7 @@ fn runKexServer(s: *Server, received: ?[]const u8) !void {
 
     var reply_storage: [512]u8 = undefined;
     var reply: wire.Writer = .init(&reply_storage);
-    try reply.byte(@intFromEnum(messages.Id.kex_ecdh_reply));
+    try reply.byte(@backingInt(messages.Id.kex_ecdh_reply));
     try reply.string(s.hostKeyBlob());
     try reply.string(&pair.public_key);
     var signature_storage: [128]u8 = undefined;
@@ -845,7 +845,7 @@ fn runKexServer(s: *Server, received: ?[]const u8) !void {
         s.has_session_id = true;
     }
 
-    try s.sendPacket(&.{@intFromEnum(messages.Id.newkeys)});
+    try s.sendPacket(&.{@backingInt(messages.Id.newkeys)});
     if (s.send_cipher) |*old| old.deinit();
     s.send_cipher = s.deriveCipher(
         chosen_s2c,
@@ -882,7 +882,7 @@ fn runKexServer(s: *Server, received: ?[]const u8) !void {
 fn runAuth(s: *Server, script: AuthScript) !void {
     const request = try s.recvPacket();
     var r: wire.Reader = .init(request);
-    if (try r.byte() != @intFromEnum(userauth.Id.service_request)) {
+    if (try r.byte() != @backingInt(userauth.Id.service_request)) {
         return error.FixtureServiceRequestExpected;
     }
     if (!std.mem.eql(u8, try r.string(), userauth.service_userauth)) {
@@ -902,7 +902,7 @@ fn runAuth(s: *Server, script: AuthScript) !void {
 
     var accept_storage: [128]u8 = undefined;
     var accept: wire.Writer = .init(&accept_storage);
-    try accept.byte(@intFromEnum(userauth.Id.service_accept));
+    try accept.byte(@backingInt(userauth.Id.service_accept));
     const named = script.service_name orelse userauth.service_userauth;
     // An empty name writes no field at all, which is what some servers do
     // and what `userauth.parseServiceAccept` allows.
@@ -920,7 +920,7 @@ fn runAuth(s: *Server, script: AuthScript) !void {
     while (rounds < script.max_requests) : (rounds += 1) {
         const payload = try s.recvPacket();
         var rr: wire.Reader = .init(payload);
-        if (try rr.byte() != @intFromEnum(userauth.Id.request)) {
+        if (try rr.byte() != @backingInt(userauth.Id.request)) {
             return error.FixtureAuthRequestExpected;
         }
         const user = try rr.string();
@@ -952,7 +952,7 @@ fn runAuth(s: *Server, script: AuthScript) !void {
                 }
                 var storage: [1024]u8 = undefined;
                 var w: wire.Writer = .init(&storage);
-                try w.byte(@intFromEnum(userauth.Id.method_specific));
+                try w.byte(@backingInt(userauth.Id.method_specific));
                 try w.string(algorithm);
                 // A forged echo names the fixture's own host key, which
                 // the client never sent.
@@ -991,7 +991,7 @@ fn runAuth(s: *Server, script: AuthScript) !void {
                 change_sent = true;
                 var storage: [256]u8 = undefined;
                 var w: wire.Writer = .init(&storage);
-                try w.byte(@intFromEnum(userauth.Id.method_specific));
+                try w.byte(@backingInt(userauth.Id.method_specific));
                 try w.string("your password has expired");
                 try w.string("");
                 try s.sendPacket(w.written());
@@ -1028,7 +1028,7 @@ fn runAuth(s: *Server, script: AuthScript) !void {
 
                 const answer = try s.recvPacket();
                 var ar: wire.Reader = .init(answer);
-                if (try ar.byte() != @intFromEnum(userauth.Id.info_response)) {
+                if (try ar.byte() != @backingInt(userauth.Id.info_response)) {
                     return error.FixtureInfoResponseExpected;
                 }
                 const count = try ar.uint32();
@@ -1081,7 +1081,7 @@ fn checkSignature(
     var storage: [4096]u8 = undefined;
     var w: wire.Writer = .init(&storage);
     try w.string(&s.session_id);
-    try w.byte(@intFromEnum(userauth.Id.request));
+    try w.byte(@backingInt(userauth.Id.request));
     try w.string(user);
     try w.string(userauth.service_connection);
     try w.string("publickey");
@@ -1100,7 +1100,7 @@ fn checkSignature(
 fn sendBanner(s: *Server, text: []const u8) !void {
     var storage: [userauth.max_banner_bytes + 64]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(userauth.Id.banner));
+    try w.byte(@backingInt(userauth.Id.banner));
     try w.string(text);
     try w.string("");
     try s.sendPacket(w.written());
@@ -1110,7 +1110,7 @@ fn sendBanner(s: *Server, text: []const u8) !void {
 fn sendInfoRequest(s: *Server, prompts: u32, echo: bool) !void {
     var storage: [1024]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(userauth.Id.method_specific));
+    try w.byte(@backingInt(userauth.Id.method_specific));
     try w.string("zurl fixture");
     try w.string("");
     try w.string("");
@@ -1124,7 +1124,7 @@ fn sendInfoRequest(s: *Server, prompts: u32, echo: bool) !void {
 
 /// Writes a `SSH_MSG_USERAUTH_SUCCESS`.
 fn sendAuthSuccess(s: *Server) !void {
-    try s.sendPacket(&.{@intFromEnum(userauth.Id.success)});
+    try s.sendPacket(&.{@backingInt(userauth.Id.success)});
     s.authenticated = true;
 }
 
@@ -1142,7 +1142,7 @@ fn runConnection(s: *Server, script: ConnectionScript) !void {
         // server waiting.
         var storage: [128]u8 = undefined;
         var w: wire.Writer = .init(&storage);
-        try w.byte(@intFromEnum(connection.Id.global_request));
+        try w.byte(@backingInt(connection.Id.global_request));
         try w.string("hostkeys-00@openssh.com");
         try w.boolean(true);
         try s.sendPacket(w.written());
@@ -1178,7 +1178,7 @@ fn runConnection(s: *Server, script: ConnectionScript) !void {
 
     var storage: [64]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(connection.Id.channel_open_confirmation));
+    try w.byte(@backingInt(connection.Id.channel_open_confirmation));
     try w.uint32(s.client_channel);
     try w.uint32(fixture_channel);
     try w.uint32(script.window_bytes);
@@ -1190,7 +1190,7 @@ fn runConnection(s: *Server, script: ConnectionScript) !void {
         // forwarding it did not want.
         var offer_storage: [128]u8 = undefined;
         var offer: wire.Writer = .init(&offer_storage);
-        try offer.byte(@intFromEnum(connection.Id.channel_open));
+        try offer.byte(@backingInt(connection.Id.channel_open));
         try offer.string("x11");
         try offer.uint32(99);
         try offer.uint32(1024);
@@ -1255,7 +1255,7 @@ fn runConnection(s: *Server, script: ConnectionScript) !void {
                 .channel_success;
             var reply_storage: [16]u8 = undefined;
             var reply: wire.Writer = .init(&reply_storage);
-            try reply.byte(@intFromEnum(id));
+            try reply.byte(@backingInt(id));
             try reply.uint32(s.client_channel);
             try s.sendPacket(reply.written());
         }
@@ -1279,7 +1279,7 @@ fn runConnection(s: *Server, script: ConnectionScript) !void {
     if (script.exit_status) |code| {
         var exit_storage: [64]u8 = undefined;
         var exit: wire.Writer = .init(&exit_storage);
-        try exit.byte(@intFromEnum(connection.Id.channel_request));
+        try exit.byte(@backingInt(connection.Id.channel_request));
         try exit.uint32(s.client_channel);
         try exit.string(connection.exit_status_request);
         try exit.boolean(false);
@@ -1321,7 +1321,7 @@ fn sendStrayRequests(s: *Server, count: usize) !void {
     while (sent < count) : (sent += 1) {
         var storage: [64]u8 = undefined;
         var w: wire.Writer = .init(&storage);
-        try w.byte(@intFromEnum(connection.Id.channel_request));
+        try w.byte(@backingInt(connection.Id.channel_request));
         try w.uint32(s.client_channel);
         try w.string("keepalive@openssh.com");
         try w.boolean(false);
@@ -1790,7 +1790,7 @@ fn sendSftpPacket(s: *Server, body: []const u8) !void {
 
         var storage: [frame_bytes]u8 = undefined;
         var w: wire.Writer = .init(&storage);
-        try w.byte(@intFromEnum(connection.Id.channel_data));
+        try w.byte(@backingInt(connection.Id.channel_data));
         try w.uint32(s.client_channel);
         try w.uint32(@intCast(take));
         var wrote: usize = 0;
@@ -1874,9 +1874,9 @@ fn creditClient(s: *Server, taken: u32) !void {
 fn sendExtendedData(s: *Server, text: []const u8) !void {
     var storage: [4096]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(connection.Id.channel_extended_data));
+    try w.byte(@backingInt(connection.Id.channel_extended_data));
     try w.uint32(s.client_channel);
-    try w.uint32(@intFromEnum(connection.ExtendedDataType.stderr));
+    try w.uint32(@backingInt(connection.ExtendedDataType.stderr));
     try w.string(text);
     try s.sendPacket(w.written());
 }
@@ -1940,7 +1940,7 @@ fn recvConnectionPacket(s: *Server) ![]const u8 {
 fn sendAuthFailure(s: *Server, methods: []const u8, partial: bool) !void {
     var storage: [1024]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(userauth.Id.failure));
+    try w.byte(@backingInt(userauth.Id.failure));
     try w.string(methods);
     try w.boolean(partial);
     try s.sendPacket(w.written());
@@ -2010,8 +2010,8 @@ fn deriveCipher(
 /// Builds this fixture's `SSH_MSG_KEXINIT` from its script.
 fn writeServerKexinit(s: *Server) ![]u8 {
     var w: wire.Writer = .init(&s.server_kexinit_storage);
-    try w.byte(@intFromEnum(messages.Id.kexinit));
-    try w.bytes(&[_]u8{0x5c} ** algorithms.cookie_bytes);
+    try w.byte(@backingInt(messages.Id.kexinit));
+    try w.bytes(&@as([algorithms.cookie_bytes]u8, @splat(0x5c)));
     const offer_marker = s.script.strict_kex and
         !(s.script.drop_strict_on_rekey and s.kex_count != 0);
     if (offer_marker) {

@@ -185,7 +185,7 @@ pub const BuildError = wire.WriteError;
 pub fn writeInit(out: []u8) BuildError![]u8 {
     var w: wire.Writer = .init(out);
     try w.uint32(1 + 4);
-    try w.byte(@intFromEnum(Type.init));
+    try w.byte(@backingInt(Type.init));
     try w.uint32(version);
     return w.written();
 }
@@ -196,7 +196,7 @@ pub fn writeInit(out: []u8) BuildError![]u8 {
 /// creates. OpenSSH's own client does the same for a plain upload.
 pub fn writeOpen(out: []u8, id: u32, path: []const u8, pflags: u32) BuildError![]u8 {
     var body: wire.Writer = .init(try afterLength(out));
-    try body.byte(@intFromEnum(Type.open));
+    try body.byte(@backingInt(Type.open));
     try body.uint32(id);
     try body.string(path);
     try body.uint32(pflags);
@@ -219,7 +219,7 @@ pub fn writeRead(
     len: u32,
 ) BuildError![]u8 {
     var body: wire.Writer = .init(try afterLength(out));
-    try body.byte(@intFromEnum(Type.read));
+    try body.byte(@backingInt(Type.read));
     try body.uint32(id);
     try body.string(handle);
     try body.uint64(offset);
@@ -236,7 +236,7 @@ pub fn writeWrite(
     data: []const u8,
 ) BuildError![]u8 {
     var body: wire.Writer = .init(try afterLength(out));
-    try body.byte(@intFromEnum(Type.write));
+    try body.byte(@backingInt(Type.write));
     try body.uint32(id);
     try body.string(handle);
     try body.uint64(offset);
@@ -278,7 +278,7 @@ pub fn writeRealpath(out: []u8, id: u32, path: []const u8) BuildError![]u8 {
 
 fn writePathOnly(out: []u8, kind: Type, id: u32, path: []const u8) BuildError![]u8 {
     var body: wire.Writer = .init(try afterLength(out));
-    try body.byte(@intFromEnum(kind));
+    try body.byte(@backingInt(kind));
     try body.uint32(id);
     try body.string(path);
     return finish(out, body.at);
@@ -286,7 +286,7 @@ fn writePathOnly(out: []u8, kind: Type, id: u32, path: []const u8) BuildError![]
 
 fn writeHandleOnly(out: []u8, kind: Type, id: u32, handle: []const u8) BuildError![]u8 {
     var body: wire.Writer = .init(try afterLength(out));
-    try body.byte(@intFromEnum(kind));
+    try body.byte(@backingInt(kind));
     try body.uint32(id);
     try body.string(handle);
     return finish(out, body.at);
@@ -314,7 +314,7 @@ fn finish(out: []u8, body_len: usize) BuildError![]u8 {
 /// The type byte of a packet body, or null for an empty body.
 pub fn typeOf(body: []const u8) ?Type {
     if (body.len == 0) return null;
-    return @enumFromInt(body[0]);
+    return @fromBackingInt(@intCast(body[0]));
 }
 
 /// The request id of a packet body, or null for a type that carries none.
@@ -342,7 +342,7 @@ pub const Version = struct {
 /// Reads a `SSH_FXP_VERSION`.
 pub fn parseVersion(body: []const u8) ParseError!Version {
     var r: wire.Reader = .init(body);
-    if (try r.byte() != @intFromEnum(Type.version)) return error.WrongPacketType;
+    if (try r.byte() != @backingInt(Type.version)) return error.WrongPacketType;
     return .{ .version = try r.uint32(), .extensions = r.rest() };
 }
 
@@ -365,9 +365,9 @@ pub const StatusReply = struct {
 /// pair reads as two empty strings.
 pub fn parseStatus(body: []const u8) ParseError!StatusReply {
     var r: wire.Reader = .init(body);
-    if (try r.byte() != @intFromEnum(Type.status)) return error.WrongPacketType;
+    if (try r.byte() != @backingInt(Type.status)) return error.WrongPacketType;
     const id = try r.uint32();
-    const status: Status = @enumFromInt(try r.uint32());
+    const status: Status = @fromBackingInt(@intCast(try r.uint32()));
     if (r.atEnd()) return .{ .id = id, .status = status, .message = "", .language = "" };
     const message = try r.string();
     const language = if (r.atEnd()) "" else try r.string();
@@ -385,7 +385,7 @@ pub const HandleReply = struct {
 /// Reads a `SSH_FXP_HANDLE`.
 pub fn parseHandle(body: []const u8) ParseError!HandleReply {
     var r: wire.Reader = .init(body);
-    if (try r.byte() != @intFromEnum(Type.handle)) return error.WrongPacketType;
+    if (try r.byte() != @backingInt(Type.handle)) return error.WrongPacketType;
     const out: HandleReply = .{ .id = try r.uint32(), .handle = try r.string() };
     if (!r.atEnd()) return error.TrailingBytes;
     return out;
@@ -401,7 +401,7 @@ pub const DataReply = struct {
 /// Reads a `SSH_FXP_DATA`.
 pub fn parseData(body: []const u8) ParseError!DataReply {
     var r: wire.Reader = .init(body);
-    if (try r.byte() != @intFromEnum(Type.data)) return error.WrongPacketType;
+    if (try r.byte() != @backingInt(Type.data)) return error.WrongPacketType;
     const out: DataReply = .{ .id = try r.uint32(), .bytes = try r.string() };
     if (!r.atEnd()) return error.TrailingBytes;
     return out;
@@ -477,7 +477,7 @@ pub const AttrsReply = struct {
 /// Reads a `SSH_FXP_ATTRS`.
 pub fn parseAttrs(body: []const u8) ParseError!AttrsReply {
     var r: wire.Reader = .init(body);
-    if (try r.byte() != @intFromEnum(Type.attrs)) return error.WrongPacketType;
+    if (try r.byte() != @backingInt(Type.attrs)) return error.WrongPacketType;
     const id = try r.uint32();
     const attributes = try readAttributes(&r);
     if (!r.atEnd()) return error.TrailingBytes;
@@ -526,7 +526,7 @@ pub const NameReply = struct {
 /// **The count is checked before one entry is read.**
 pub fn parseName(body: []const u8) ParseError!NameReply {
     var r: wire.Reader = .init(body);
-    if (try r.byte() != @intFromEnum(Type.name)) return error.WrongPacketType;
+    if (try r.byte() != @backingInt(Type.name)) return error.WrongPacketType;
     const id = try r.uint32();
     const count = try r.uint32();
     if (count > max_names) return error.CountTooLarge;
@@ -617,7 +617,7 @@ test "a status with no message reads as one with two empty strings" {
 }
 
 test "a status code the draft does not assign parses and has no sentence" {
-    const private: Status = @enumFromInt(1000);
+    const private: Status = @fromBackingInt(@intCast(1000));
     try testing.expectEqual(@as(?[]const u8, null), private.text());
 }
 

@@ -224,21 +224,21 @@ test "an integer that runs off the end of the slice is truncated, not read past"
 }
 
 test "a continuation that never ends is refused, not read forever" {
-    const forever = [_]u8{0x1f} ++ [_]u8{0x80} ** 64;
+    const forever = [_]u8{0x1f} ++ @as([64]u8, @splat(0x80));
     try testing.expectError(error.IntegerTooLong, decode(5, &forever));
 }
 
 test "a continuation of harmless zeroes still stops at the octet bound" {
     // Every octet adds nothing to the value, so no overflow ever fires.
     // Only the octet bound refuses this one.
-    const zeroes = [_]u8{0x1f} ++ [_]u8{0x80} ** continuation_octets_max ++ [_]u8{0x00};
+    const zeroes = [_]u8{0x1f} ++ @as([continuation_octets_max]u8, @splat(0x80)) ++ [_]u8{0x00};
     try testing.expectError(error.IntegerTooLong, decode(5, &zeroes));
 }
 
 test "an integer larger than the bound is refused before it wraps" {
     // 0x1f then nine octets that carry 63 bits of ones, which is past
     // 2^62 - 1.
-    const over = [_]u8{0x1f} ++ [_]u8{0xff} ** 8 ++ [_]u8{0x7f};
+    const over = [_]u8{0x1f} ++ @as([8]u8, @splat(0xff)) ++ [_]u8{0x7f};
     try testing.expectError(error.IntegerOverflow, decode(5, &over));
 }
 
@@ -248,7 +248,7 @@ test "the largest value this build holds decodes and the next one does not" {
     try testing.expectEqual(value_max, (try decode(5, written)).value);
 
     // One more than value_max, in the same shape.
-    var over = [_]u8{0} ** encoded_len_max;
+    var over: [encoded_len_max]u8 = @splat(0);
     @memcpy(over[0..written.len], written);
     over[written.len - 1] += 1;
     try testing.expectError(error.IntegerOverflow, decode(5, over[0..written.len]));

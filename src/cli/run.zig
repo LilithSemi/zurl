@@ -3471,5 +3471,6 @@ test "a Content-Range that describes no bytes is refused and never gives a posit
     try testing.expectError(error.Malformed, parseContentRange("bytes 0-0/0"));
     // Above a `u64`, and longer than the bound.
     try testing.expectError(error.Malformed, parseContentRange("bytes 18446744073709551616-9/*"));
-    try testing.expectError(error.Malformed, parseContentRange("bytes " ++ ("9" ** 200) ++ "-9/*"));
+    const digits: [200]u8 = @splat('9');
+    try testing.expectError(error.Malformed, parseContentRange("bytes " ++ digits ++ "-9/*"));
 }

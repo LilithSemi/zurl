@@ -535,8 +535,9 @@ test "a head of many short lines is read whole, which one line bound alone would
     // the bound and proves it is refused there.
     var padding: [128][]const u8 = undefined;
     var lines: [128][40]u8 = undefined;
+    const pad: [24]u8 = @splat('p');
     for (&padding, &lines, 0..) |*slot, *room, i| {
-        slot.* = try std.fmt.bufPrint(room, "X-Pad-{d}: {s}", .{ i, "p" ** 24 });
+        slot.* = try std.fmt.bufPrint(room, "X-Pad-{d}: {s}", .{ i, &pad });
     }
 
     var server: test_server.Server = undefined;

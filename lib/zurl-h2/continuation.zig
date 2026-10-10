@@ -238,7 +238,7 @@ test "a frame of any other type may not interleave with an open block" {
     _ = try seq.accept(head(.headers, 0, 1), 4);
     try testing.expectError(
         error.ContinuationExpected,
-        seq.accept(head(@enumFromInt(0xff), 0, 1), 4),
+        seq.accept(head(@fromBackingInt(@intCast(0xff)), 0, 1), 4),
     );
 }
 
@@ -376,6 +376,6 @@ test "a frame that is not a header block type passes through untouched" {
     }
     try testing.expectEqual(
         Outcome.unrelated,
-        try seq.accept(head(@enumFromInt(0x2a), 0, 0), 8),
+        try seq.accept(head(@fromBackingInt(@intCast(0x2a)), 0, 0), 8),
     );
 }

@@ -442,7 +442,7 @@ test "a search that worked reports the result code curl prints as http_code" {
 
     const body = try fx.fetcher.open(try fx.url("dc=zurl,dc=test"), .{}, null);
     try testing.expectEqual(message.ResultCode.success, body.status);
-    try testing.expectEqual(@as(i32, 0), @intFromEnum(body.status));
+    try testing.expectEqual(@as(i32, 0), @backingInt(body.status));
 }
 
 test "a referral is counted, written nowhere, and never followed" {
@@ -871,10 +871,10 @@ test "a credential longer than this package sends is refused by name" {
     try fx.start(.{});
     defer fx.stop();
 
-    const long = "a" ** (Fetcher.max_bind_dn_bytes + 1);
+    const long: [Fetcher.max_bind_dn_bytes + 1]u8 = @splat('a');
     try testing.expectError(error.CredentialTooLarge, fx.fetcher.open(
         try fx.url("dc=a"),
-        .{ .credentials = .{ .dn = long, .password = "x" } },
+        .{ .credentials = .{ .dn = &long, .password = "x" } },
         null,
     ));
     try testing.expectEqual(@as(usize, 0), fx.server.connections());

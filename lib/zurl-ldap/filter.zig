@@ -634,11 +634,11 @@ test "a backslash that is not two hexadecimal digits is refused" {
 
 test "a value longer than max_value_bytes is refused before any memory is asked for" {
     var out: [max_value_bytes]u8 = undefined;
-    const long = "x" ** (max_value_bytes + 1);
-    try testing.expectError(error.ValueTooLong, decodeValue(&out, long));
+    const long: [max_value_bytes + 1]u8 = @splat('x');
+    try testing.expectError(error.ValueTooLong, decodeValue(&out, &long));
     // Exactly the bound fits.
-    const at_bound = "x" ** max_value_bytes;
-    try testing.expectEqual(@as(usize, max_value_bytes), (try decodeValue(&out, at_bound)).len);
+    const at_bound: [max_value_bytes]u8 = @splat('x');
+    try testing.expectEqual(@as(usize, max_value_bytes), (try decodeValue(&out, &at_bound)).len);
 }
 
 test "the filters curl sends reach the wire byte for byte" {
@@ -771,7 +771,8 @@ test "an unbalanced or trailing filter is refused" {
     try testing.expectError(error.Truncated, encode(&w, "(&(cn=a)"));
     try testing.expectError(error.TrailingText, encode(&w, "(cn=a)(sn=b)"));
     try testing.expectError(error.TrailingText, encode(&w, "(cn=a) "));
-    try testing.expectError(error.FilterTooLong, encode(&w, "x" ** (max_filter_bytes + 1)));
+    const long: [max_filter_bytes + 1]u8 = @splat('x');
+    try testing.expectError(error.FilterTooLong, encode(&w, &long));
 }
 
 test "a not that holds no filter, or two, is refused" {
@@ -789,7 +790,7 @@ test "an attribute description holding a byte RFC 4512 does not name is refused"
     try testing.expectError(error.BadAttribute, encode(&w, "(c\\28n=a)"));
     try testing.expectError(error.BadAttribute, encode(&w, "(c+n=a)"));
     try testing.expectError(error.BadAttribute, encode(&w, "(=a)"));
-    try testing.expectError(error.BadAttribute, encode(&w, "(" ++ "a" ** 300 ++ "=b)"));
+    try testing.expectError(error.BadAttribute, encode(&w, "(" ++ @as([300]u8, @splat('a')) ++ "=b)"));
     // The bytes RFC 4512 section 2.5 does name all pass.
     _ = try encode(&w, "(cn;lang-en=a)");
     _ = try encode(&w, "(2.5.4.3=a)");
@@ -834,7 +835,7 @@ test "a filter that parses and does not fit reports no room and never a wrong me
     // `ParseError`, and one that parses and overruns the writer is the
     // writer's own `error.NoRoom`.
     var small: ber.Writer(32, 8) = .init();
-    try testing.expectError(error.NoRoom, write(&small, "(cn=" ++ "x" ** 64 ++ ")"));
+    try testing.expectError(error.NoRoom, write(&small, "(cn=" ++ @as([64]u8, @splat('x')) ++ ")"));
 }
 
 test "the substring pieces take the tag their position gives them" {

@@ -1,8 +1,8 @@
 Vendored copy of the standard library TLS client.
 
-Zig version: 0.16.0
-Source path: /nix/store/afbxfxrx3fmvhzp7ni9li5l3v2fbw7yn-zig-0.16.0/lib/zig/std/crypto/tls/Client.zig
-Line count at copy time: 1670
+Zig version: 0.17.0
+Source path: /nix/store/ms802lv410k52rd15fxpg4qllfw57baw-zig-0.17.0/lib/zig/std/crypto/tls/Client.zig
+Line count at copy time: 1779
 
 Why this file is here
 ---------------------
@@ -536,33 +536,45 @@ finding `p4-h2-complete-report.md` recorded, and this is what closes it.
    keeps it exactly as it is: the rotation happens at the same record it
    always happened at, and only the task that performs it changed.
 
-20. Four lines that bound a length the peer wrote, one in `init` and three
-   in `readIndirect`. Each one stands in front of a subtraction that
+20. Two lines that bound a length the peer wrote, one in `init` and one in
+   `readIndirect`, and one assertion in a test of upstream's. Each of the
+   two lines stands in front of a subtraction that
    upstream leaves open, and each one refuses an input that made the
    subtraction wrap.
 
-   `readIndirect` reads the two octet length of the record header and
-   checks it against `max_ciphertext_len` alone, which bounds it from
-   above and not from below. The TLS 1.3 arm then subtracts the tag
-   length and the TLS 1.2 arm subtracts the explicit IV and the tag, both
-   in `u16`. The five octets `17 03 03 00 00` from the server therefore
-   gave a length of 65520, the `take` of that length failed into a `catch
-   unreachable`, and the record cipher wrote into a slice whose length the
-   optimiser was free to choose. The same function then strips the zero
-   padding of a TLS 1.3 record and reads the inner content type at
-   `msg.len - 1`, which wraps for a plaintext of all zero octets. RFC 8446
-   section 5.4 makes such a record one to refuse.
+   `readIndirect` strips the zero padding of a TLS 1.3 record and reads
+   the inner content type at `msg.len - 1`, which wraps for a plaintext
+   of all zero octets. RFC 8446 section 5.4 makes such a record one to
+   refuse.
 
-   The handshake loop of `init` has the third shape of the same fault: it
+   The handshake loop of `init` has the same fault in another shape: it
    adds the length of the stripped plaintext to `cleartext_fragment_end`
    and then steps back one octet to the inner content type. A record that
    decrypts to no octets left nothing to step back over.
 
-   Upstream's own handshake loop carries the two lower bounds on
-   `record_len` that `readIndirect` does not, so this is an omission
-   upstream made and not a rule this side invented. The tests are in
-   `test_server.zig`, under `Options.fault`, and each one drives the
-   shipped client against a server that sends the record.
+   Zig 0.17 added both of these checks with the error `TlsDecodeError`.
+   This copy keeps `TlsUnexpectedMessage`, because the tests assert that
+   name, so the two lines stay part of the patch. The copy takes
+   upstream's shape around each one, which is `trimmed_len` in the
+   handshake loop, so the patch is now the error name and nothing else.
+
+   Upstream's own test `empty inner plaintext` asserts `TlsDecodeError`,
+   so the assertion in it carries a marker and reads
+   `TlsUnexpectedMessage`. That is the third line of this item, and it is
+   the only upstream assertion the copy changes. Upstream's three other
+   new tests of this area assert `TlsRecordOverflow`, which this copy
+   raises too, so they stay as upstream wrote them.
+
+   This item held two more lines until Zig 0.17. They were the lower
+   bounds on `record_len` in the two arms of `readIndirect`. Five octets
+   from a server, `17 03 03 00 00`, made the subtraction below each one
+   wrap to 65520, the `take` of that length failed into a `catch
+   unreachable`, and the record cipher wrote into a slice whose length
+   the optimiser was free to choose. Zig 0.17 carries both bounds with
+   the error name this side chose, so the copy takes upstream's text and
+   the two markers are gone. The tests are in `test_server.zig`, under
+   `Options.fault`, and each one drives the shipped client against a
+   server that sends the record.
 
 21. One line in `init` that bounds the host before it is cast, one line in
    `verifySignature` that refuses `rsa_pkcs1_sha1`, one member dropped from
@@ -589,7 +601,7 @@ finding `p4-h2-complete-report.md` recorded, and this is what closes it.
    ReleaseFast build a user runs, so the bound is a named refusal in front
    of it. See `host_name_max`.
 
-22. Two lines in the `key_update` arm of `readIndirect`, and one line in
+22. One line in the `key_update` arm of `readIndirect`, and one line in
    front of the sub-message loop above it.
 
    The arm reads `p.tls_1_3` out of `tls.ApplicationCipher`, whose payload
@@ -599,14 +611,21 @@ finding `p4-h2-complete-report.md` recorded, and this is what closes it.
    check stands in front of an untagged union in any build mode. RFC 8446
    section 4.6.3 gives `key_update` to TLS 1.3 alone.
 
-   The same arm reads `handshake[0]`, the `request_update` octet that says
-   whether the write keys rotate too, and a `handshake_len` of zero passed
-   the bound above it and left that slice empty.
-
    The loop itself read all four octets of a sub-message header before it
    checked that four octets were there, so an inner plaintext of one to
    four octets read the three octet length out of the record before this
    one, which the same peer wrote.
+
+   This item held a second line in the arm until Zig 0.17. The arm reads
+   `handshake[0]`, the `request_update` octet that says whether the write
+   keys rotate too, and a `handshake_len` of zero passed the bound above
+   it and left that slice empty. Zig 0.17 carries
+   `if (handshake.len != 1) return failRead(c, error.TlsDecodeError);`
+   with the error name this side chose, so the copy takes upstream's text
+   and the marker is gone. The version check above it still runs first,
+   because a `key_update` on a TLS 1.2 session is the worse fault of the
+   two. The test is *"a key update with an empty body is refused"*, in
+   `test_server.zig` under `Options.fault`.
 
 23. `verifyCertificateStrength`, in the appended block, called once for
    every certificate of both walks. `verifyEndEntity` reads the leaf and

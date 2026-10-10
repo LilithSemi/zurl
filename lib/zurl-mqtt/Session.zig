@@ -165,7 +165,7 @@ pub fn receive(s: *Session) ReceiveError!Incoming {
     // neither, so a peer that sends one is refused rather than read as
     // something it is not.
     if (raw_type == 0 or raw_type == 15) return error.ReservedPacketType;
-    const kind: packet.Type = @enumFromInt(raw_type);
+    const kind: packet.Type = @fromBackingInt(@intCast(raw_type));
     const flags: u4 = @intCast(header[0] & 0x0f);
 
     // **The length bytes are read one at a time.** A peer that never
@@ -303,7 +303,7 @@ test "the flags nibble reaches the caller, because a PUBLISH carries its QoS the
 test "a fifth continuation byte ends the session rather than reads on" {
     // **The hazard this file exists for, on a live reader.** A peer that
     // never clears the top bit would hold an unbounded reader forever.
-    const f = try Fixture.start(&([_]u8{0x30} ++ [_]u8{0xff} ** 32));
+    const f = try Fixture.start(&([_]u8{0x30} ++ @as([32]u8, @splat(0xff))));
     defer f.stop();
 
     try testing.expectError(error.BadRemainingLength, f.session.receive());

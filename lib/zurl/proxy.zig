@@ -343,10 +343,10 @@ test "a proxy credential of a thousand characters builds" {
     // The defect this shape exists to avoid is the one `authorize.zig`
     // records: a fixed buffer refused every modern token. The buffer here
     // is measured from the credential.
-    const long = "t" ** 1200;
+    const long: [1200]u8 = @splat('t');
     var resolved = try resolve(testing.allocator, .{
         .proxy = try zurl_core.proxy.parse("http://127.0.0.1:3128"),
-        .proxy_credentials = .{ .user = "cache", .password = long },
+        .proxy_credentials = .{ .user = "cache", .password = &long },
     });
     defer resolved.deinit(testing.allocator);
 

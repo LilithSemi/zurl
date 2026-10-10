@@ -547,7 +547,7 @@ test "RFC 9113 section 4.1, an unknown frame type is ignored and never refused" 
         var head: [frame.header_len]u8 = undefined;
         (Header{
             .length = 1,
-            .type = @enumFromInt(@as(u8, @intCast(t))),
+            .type = @fromBackingInt(@intCast(@as(u8, @intCast(t)))),
             .flags = 0xff,
             .stream_id = 1,
         }).encode(&head);
@@ -625,7 +625,7 @@ test "a stream error leaves the connection up, and a connection error does not" 
     // The two lists together are the whole error set, so no fault is
     // left without a scope.
     const total = stream_faults.len + connection_faults.len;
-    try testing.expectEqual(@typeInfo(errors.Error).error_set.?.len, total);
+    try testing.expectEqual(@typeInfo(errors.Error).error_set.error_names.?.len, total);
 }
 
 test "nothing in this package allocates without a bound" {

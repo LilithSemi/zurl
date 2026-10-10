@@ -449,7 +449,7 @@ test "an offset near the top of the range is refused with no overflow" {
     // which code closes the connection. This test fails against a file
     // that checks the window first.
     try testing.expectError(error.OffsetTooLarge, r.push(varint.max_value - 1, "xxx", false));
-    try testing.expectError(error.OffsetTooLarge, r.push(varint.max_value - 100, "x" ** 200, false));
+    try testing.expectError(error.OffsetTooLarge, r.push(varint.max_value - 100, &@as([200]u8, @splat('x')), false));
     try testing.expectEqual(@as(usize, 0), r.range_count);
     try testing.expectEqual(@as(u64, 0), r.highest);
 }

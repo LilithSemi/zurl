@@ -842,7 +842,7 @@ test "a file whose content holds the boundary fails the send instead of forging 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "f.bin", .data = "x" ** 4096 });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "f.bin", .data = &@as([4096]u8, @splat('x')) });
     const handle = try tmp.dir.openFile(testing.io, "f.bin", .{});
     defer handle.close(testing.io);
 

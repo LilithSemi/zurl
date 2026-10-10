@@ -2324,7 +2324,7 @@ fn speaksScheme(scheme: []const u8) bool {
 /// nothing.
 fn followableRedirect(head: engine.Head) bool {
     if (head.status < 300 or head.status >= 400) return false;
-    if (head.status == @intFromEnum(std.http.Status.not_modified)) return false;
+    if (head.status == @backingInt(std.http.Status.not_modified)) return false;
     return head.location != null;
 }
 
@@ -2370,10 +2370,10 @@ comptime {
     // `SetupError`, and that call scans a table of about sixty rows, so
     // the product needs far more than the default branch quota.
     @setEvalBranchQuota(200_000);
-    for (@typeInfo(zurl_net.errors.SetupError).error_set.?) |field| {
-        const err: zurl_net.errors.SetupError = @field(zurl_net.errors.SetupError, field.name);
+    for (@typeInfo(zurl_net.errors.SetupError).error_set.error_names.?) |name| {
+        const err: zurl_net.errors.SetupError = @field(zurl_net.errors.SetupError, name);
         if (openErrorFor(zurl_net.errors.toCore(err)) == null) @compileError(
-            "h1.zig: zurl-net can report error." ++ field.name ++
+            "h1.zig: zurl-net can report error." ++ name ++
                 ", and `openErrorFor` has no arm for what it means",
         );
     }
@@ -3878,10 +3878,10 @@ const Exchange = struct {
     fn rewriteHop(hop: *engine.Request, status: u16) void {
         if (hop.redirect_methods.keeps(status)) return;
         const rewrite = switch (status) {
-            @intFromEnum(std.http.Status.moved_permanently),
-            @intFromEnum(std.http.Status.found),
+            @backingInt(std.http.Status.moved_permanently),
+            @backingInt(std.http.Status.found),
             => hop.method == .POST,
-            @intFromEnum(std.http.Status.see_other) => hop.method != .HEAD,
+            @backingInt(std.http.Status.see_other) => hop.method != .HEAD,
             else => false,
         };
         if (!rewrite) return;
@@ -5044,7 +5044,7 @@ const Exchange = struct {
         // the number would trust it, and the body would not match.
         const logged = engine_state.loggedHeads();
         exchange.head_value = .{
-            .status = @intFromEnum(head.status),
+            .status = @backingInt(head.status),
             // The version the peer wrote on its own status line, read
             // back off the parsed head. A peer that answered `HTTP/1.0`
             // is reported as `1.0`, which is what curl prints for it.
@@ -8924,12 +8924,12 @@ test "the head reports the digest challenge, whatever order the server listed" {
 
 test "a WWW-Authenticate header too long to keep is reported, not silently dropped" {
     const test_server = @import("test_server.zig");
-    const realm = "r" ** 2048;
+    const realm: [2048]u8 = @splat('r');
     const response_text = try std.fmt.allocPrint(
         testing.allocator,
         "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Digest realm=\"{s}\", nonce=\"n\"\r\n" ++
             "Content-Length: 0\r\nConnection: close\r\n\r\n",
-        .{realm},
+        .{&realm},
     );
     defer testing.allocator.free(response_text);
 
@@ -9332,7 +9332,7 @@ test "an oversize digest challenge takes a fitting basic challenge with it" {
     // no challenge answered `Basic`. That sends the password in reversible
     // base64 to a server that had offered a scheme where it never travels.
     const test_server = @import("test_server.zig");
-    const long_realm = "r" ** 1100;
+    const long_realm: [1100]u8 = @splat('r');
     var server: test_server.TestServer = undefined;
     try server.start(&.{
         "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"small\"\r\n" ++
@@ -12486,10 +12486,10 @@ test "a body abandoned part way through does not poison the next request" {
     // really is at the start of the next response. Three thousand bytes is
     // past both buffers in the path, the caller's and
     // `transfer_buffer_len`.
-    const long_body = "A" ** 3000;
+    const long_body: [3000]u8 = @splat('A');
     var server: test_server_mod.TestServer = undefined;
     try server.startWith(
-        &.{ keptAlive(long_body), keptAlive("clean") },
+        &.{ keptAlive(&long_body), keptAlive("clean") },
         .{ .responses_per_connection = null },
     );
     defer server.stop();
@@ -12969,9 +12969,9 @@ test "an origin compares every field and no shortcut" {
     // A host longer than the storage is not poolable. Nothing reaches this
     // through `openOnce`, because a name that long cannot be dialed, but
     // the branch must answer rather than write past the buffer.
-    const too_long = "x" ** (masked_host_max + 1);
-    try testing.expectEqual(@as(?Origin, null), directOrigin(.plain, too_long, 80, .{
-        .host = too_long,
+    const too_long: [masked_host_max + 1]u8 = @splat('x');
+    try testing.expectEqual(@as(?Origin, null), directOrigin(.plain, &too_long, 80, .{
+        .host = &too_long,
         .port = 80,
         .overridden = false,
     }, base));
@@ -12979,7 +12979,7 @@ test "an origin compares every field and no shortcut" {
     // an override that cannot be kept leaves a connection that is used
     // once and closed rather than one keyed on a truncated address.
     try testing.expectEqual(@as(?Origin, null), directOrigin(.plain, "example.com", 80, .{
-        .host = too_long,
+        .host = &too_long,
         .port = 80,
         .overridden = true,
     }, base));
@@ -13070,7 +13070,7 @@ test "a pooled connection through one proxy never serves a request for another" 
     // A proxy host longer than the storage is not poolable, the same
     // answer a url host that long gets.
     other = first;
-    other.host = "x" ** (masked_host_max + 1);
+    other.host = &@as([masked_host_max + 1]u8, @splat('x'));
     try testing.expectEqual(
         @as(?Origin, null),
         testOrigin(.tls, "example.com", 443, dial, other, req),
@@ -13443,8 +13443,8 @@ test "a Cookie header and a jar too large to join are refused, not cut in half" 
     var buffer: [cookie_buffer_len]u8 = undefined;
     @memset(&buffer, 'a');
     const jar_value = buffer[0..engine.cookie_header_len_max];
-    const caller_value = "b" ** (engine.cookie_header_len_max - 1);
-    try testing.expectError(error.InvalidHeader, mergeCookies(&buffer, jar_value, caller_value));
+    const caller_value: [engine.cookie_header_len_max - 1]u8 = @splat('b');
+    try testing.expectError(error.InvalidHeader, mergeCookies(&buffer, jar_value, &caller_value));
 
     // One byte under the bound joins, and the join is the two values with
     // a semicolon and a space between them.

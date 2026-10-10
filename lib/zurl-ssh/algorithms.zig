@@ -158,7 +158,7 @@ pub const Kexinit = struct {
 /// that a later extension made legal.
 pub fn parseKexinit(payload: []const u8) ParseError!Kexinit {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(messages.Id.kexinit)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(messages.Id.kexinit)) return error.WrongMessage;
     const cookie = try r.take(cookie_bytes);
 
     // Read one field at a time, in wire order. A struct literal would
@@ -205,7 +205,7 @@ pub fn parseKexinit(payload: []const u8) ParseError!Kexinit {
 /// This module draws no entropy, so the caller passes the cookie in.
 pub fn writeKexinit(out: []u8, cookie: [cookie_bytes]u8) wire.WriteError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(messages.Id.kexinit));
+    try w.byte(@backingInt(messages.Id.kexinit));
     try w.bytes(&cookie);
     try w.nameList(&offered_kex);
     try w.nameList(&offered_host_key);
@@ -337,8 +337,8 @@ const ServerLists = struct {
 
 fn writeServerKexinit(out: []u8, lists: ServerLists) ![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(messages.Id.kexinit));
-    try w.bytes(&[_]u8{0xab} ** cookie_bytes);
+    try w.byte(@backingInt(messages.Id.kexinit));
+    try w.bytes(&@as([cookie_bytes]u8, @splat(0xab)));
     try w.string(lists.kex);
     try w.string(lists.host_key);
     try w.string(lists.cipher_c2s);
@@ -543,7 +543,7 @@ test "a truncated or wrong KEXINIT is refused and never read past" {
     // A list whose length runs past the payload is refused on the length.
     try testing.expectError(
         error.LengthOutOfRange,
-        parseKexinit("\x14" ++ "\x00" ** 16 ++ "\xff\xff\xff\xff"),
+        parseKexinit("\x14" ++ &@as([16]u8, @splat(0)) ++ "\xff\xff\xff\xff"),
     );
 }
 

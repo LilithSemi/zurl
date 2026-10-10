@@ -694,7 +694,7 @@ test "every variable renders together in one format string" {
 }
 
 test "a name past the bound is unknown, and the line that names it stays bounded" {
-    const long_name = "z" ** (max_variable_name_len + 40);
+    const long_name: [max_variable_name_len + 40]u8 = @splat('z');
     var out_buffer: [256]u8 = undefined;
     var warn_buffer: [256]u8 = undefined;
     var out: Writer = .fixed(&out_buffer);
@@ -726,7 +726,8 @@ test "a format string of thousands of variables renders every one" {
     // `max_format_bytes` bounds the count. This checks the loop keeps up
     // with a string near that shape rather than stopping early.
     const repeats = 4000;
-    const format = "%{http_code}" ** repeats;
+    const variable = "%{http_code}";
+    const format = std.mem.sliceAsBytes(&@as([repeats][variable.len]u8, @splat(variable.*)));
     try testing.expect(format.len <= max_format_bytes);
 
     var buffer: [3 * repeats]u8 = undefined;

@@ -302,13 +302,13 @@ fn checkCovered(comptime set: type) void {
     // holds about fifty members against about forty rows. The default
     // quota of a thousand branches does not cover that product.
     @setEvalBranchQuota(20_000);
-    for (@typeInfo(set).error_set.?) |field| {
-        const err: anyerror = @field(set, field.name);
+    for (@typeInfo(set).error_set.error_names.?) |name| {
+        const err: anyerror = @field(set, name);
         var found = false;
         for (rows) |row| {
             if (row.err == err) found = true;
         }
-        if (!found) @compileError("errors.zig: error." ++ field.name ++ " has no row in `rows`");
+        if (!found) @compileError("errors.zig: error." ++ name ++ " has no row in `rows`");
     }
 }
 
@@ -549,8 +549,8 @@ test "every zurl_core fault has a row, so none of them can fall through" {
     // The comptime check proves this at build time. This test says the
     // same thing out loud, so a reader of the suite sees the rule without
     // reading the comptime block.
-    inline for (@typeInfo(Error).error_set.?) |field| {
-        const err: anyerror = @field(Error, field.name);
+    inline for (@typeInfo(Error).error_set.error_names.?) |name| {
+        const err: anyerror = @field(Error, name);
         try testing.expect(lookup(err) != null);
     }
 }

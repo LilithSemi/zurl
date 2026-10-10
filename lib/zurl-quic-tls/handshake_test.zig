@@ -200,8 +200,8 @@ const Server = struct {
 
     fn init(connection_id: packet.ConnectionId, original: packet.ConnectionId) !Server {
         var self: Server = .{
-            .x25519 = try .generateDeterministic([_]u8{0x5a} ** 32),
-            .signer = try .generateDeterministic([_]u8{0x3c} ** 32),
+            .x25519 = .generateDeterministic(@splat(0x5a)),
+            .signer = try .generateDeterministic(@splat(0x3c)),
             .connection_id = connection_id,
             .original_connection_id = original,
         };
@@ -229,9 +229,9 @@ const Server = struct {
             tbs.byte(0x17);
             tbs.byte(13);
             tbs.push("200101000000Z");
-            tbs.byte(0x17);
-            tbs.byte(13);
-            tbs.push("991231235959Z");
+            tbs.byte(0x18);
+            tbs.byte(15);
+            tbs.push("20991231235959Z");
             tbs.wrapDer(at, 0x30);
         }
         writeName(&tbs);
@@ -302,17 +302,17 @@ const Server = struct {
         const client_share = findKeyShare(hello) orelse return error.NoKeyShare;
 
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.server_hello));
+        out.byte(@backingInt(tls.HandshakeType.server_hello));
         const body = out.mark();
-        out.int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2));
+        out.int(u16, @backingInt(tls.ProtocolVersion.tls_1_2));
         if (self.fault.hello_retry) {
             out.push(&tls.hello_retry_request_sequence);
         } else {
-            out.push(&[_]u8{0x7e} ** 32);
+            out.push(&@as([32]u8, @splat(0x7e)));
         }
         if (self.fault.echo_session_id) {
             out.byte(32);
-            out.push(&[_]u8{0x11} ** 32);
+            out.push(&@as([32]u8, @splat(0x11)));
         } else {
             out.byte(0);
         }
@@ -320,18 +320,18 @@ const Server = struct {
             .AES_128_CCM_SHA256
         else
             schedule.codeOf(self.suite);
-        out.int(u16, @intFromEnum(code));
+        out.int(u16, @backingInt(code));
         out.byte(0); // legacy_compression_method
 
         const extensions = out.mark();
-        out.int(u16, @intFromEnum(tls.ExtensionType.supported_versions));
+        out.int(u16, @backingInt(tls.ExtensionType.supported_versions));
         out.int(u16, 2);
-        out.int(u16, @intFromEnum(
+        out.int(u16, @backingInt(
             if (self.fault.wrong_version) tls.ProtocolVersion.tls_1_2 else tls.ProtocolVersion.tls_1_3,
         ));
-        out.int(u16, @intFromEnum(tls.ExtensionType.key_share));
+        out.int(u16, @backingInt(tls.ExtensionType.key_share));
         const share = out.mark();
-        out.int(u16, @intFromEnum(
+        out.int(u16, @backingInt(
             if (self.fault.wrong_key_share_group)
                 tls.NamedGroup.x25519_ml_kem768
             else
@@ -370,7 +370,7 @@ const Server = struct {
         if (self.fault.message_too_long) {
             // A Certificate message that names sixteen megabytes of body,
             // which no buffer at this level can ever hold.
-            out.byte(@intFromEnum(tls.HandshakeType.certificate));
+            out.byte(@backingInt(tls.HandshakeType.certificate));
             out.push(&.{ 0xff, 0xff, 0xff });
             return out.data[at..out.len];
         }
@@ -378,7 +378,7 @@ const Server = struct {
         try self.certificateMessage(out);
         try self.certificateVerify(out);
         if (self.fault.tls_key_update) {
-            out.byte(@intFromEnum(tls.HandshakeType.key_update));
+            out.byte(@backingInt(tls.HandshakeType.key_update));
             out.push(&.{ 0, 0, 1, 0 });
             return out.data[at..out.len];
         }
@@ -388,7 +388,7 @@ const Server = struct {
 
     fn encryptedExtensions(self: *Server, out: *Buf(4096)) !void {
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.encrypted_extensions));
+        out.byte(@backingInt(tls.HandshakeType.encrypted_extensions));
         const body = out.mark();
         const extensions = out.mark();
 
@@ -399,7 +399,7 @@ const Server = struct {
         }
 
         if (!self.fault.no_transport_parameters) {
-            out.int(u16, @intFromEnum(tls.ExtensionType.quic_transport_parameters));
+            out.int(u16, @backingInt(tls.ExtensionType.quic_transport_parameters));
             const parameters = out.mark();
             var w: std.Io.Writer = .fixed(out.data[out.len..]);
             var stated: transport_parameters.Parameters = .{
@@ -407,7 +407,7 @@ const Server = struct {
                 .initial_max_stream_data_uni = 1 << 16,
                 .initial_max_streams_uni = 3,
                 .original_destination_connection_id = if (self.fault.wrong_original_connection_id)
-                    try .init(&[_]u8{0xff} ** 8)
+                    try .init(&@as([8]u8, @splat(0xff)))
                 else
                     self.original_connection_id,
                 .initial_source_connection_id = if (self.fault.no_initial_source_connection_id)
@@ -416,7 +416,7 @@ const Server = struct {
                     self.connection_id,
             };
             if (self.fault.unexpected_retry_connection_id) {
-                stated.retry_source_connection_id = try .init(&[_]u8{0xab} ** 4);
+                stated.retry_source_connection_id = try .init(&@as([4]u8, @splat(0xab)));
             }
             try transport_parameters.encode(stated, &w);
             out.len += w.end;
@@ -439,14 +439,14 @@ const Server = struct {
     /// Asks for a client certificate. RFC 8446 section 4.3.2.
     fn certificateRequest(self: *Server, out: *Buf(4096)) !void {
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.certificate_request));
+        out.byte(@backingInt(tls.HandshakeType.certificate_request));
         const body = out.mark();
         out.byte(0); // certificate_request_context of no bytes
         const extensions = out.mark();
-        out.int(u16, @intFromEnum(tls.ExtensionType.signature_algorithms));
+        out.int(u16, @backingInt(tls.ExtensionType.signature_algorithms));
         const ext = out.mark();
         const list = out.mark();
-        out.int(u16, @intFromEnum(tls.SignatureScheme.ecdsa_secp256r1_sha256));
+        out.int(u16, @backingInt(tls.SignatureScheme.ecdsa_secp256r1_sha256));
         out.wrapLen(list, 2);
         out.wrapLen(ext, 2);
         out.wrapLen(extensions, 2);
@@ -455,7 +455,7 @@ const Server = struct {
     }
 
     fn writeAlpn(out: *Buf(4096), name: []const u8) void {
-        out.int(u16, @intFromEnum(tls.ExtensionType.application_layer_protocol_negotiation));
+        out.int(u16, @backingInt(tls.ExtensionType.application_layer_protocol_negotiation));
         const ext = out.mark();
         const list = out.mark();
         out.byte(@intCast(name.len));
@@ -466,7 +466,7 @@ const Server = struct {
 
     fn certificateMessage(self: *Server, out: *Buf(4096)) !void {
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.certificate));
+        out.byte(@backingInt(tls.HandshakeType.certificate));
         const body = out.mark();
         out.byte(0); // certificate_request_context
         const list = out.mark();
@@ -495,7 +495,7 @@ const Server = struct {
     fn certificateVerify(self: *Server, out: *Buf(4096)) !void {
         const hash = self.transcript.peek();
         var content: Buf(256) = .{};
-        content.push(" " ** 64);
+        content.push(&@as([64]u8, @splat(' ')));
         content.push("TLS 1.3, server CertificateVerify");
         content.byte(0);
         content.push(hash.slice());
@@ -505,9 +505,9 @@ const Server = struct {
         const der_sig = signature.toDer(&der_buf);
 
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.certificate_verify));
+        out.byte(@backingInt(tls.HandshakeType.certificate_verify));
         const body = out.mark();
-        out.int(u16, @intFromEnum(tls.SignatureScheme.ecdsa_secp256r1_sha256));
+        out.int(u16, @backingInt(tls.SignatureScheme.ecdsa_secp256r1_sha256));
         const sig = out.mark();
         out.push(der_sig);
         if (self.fault.bad_signature) out.data[sig + 2 + 10] ^= 0x01;
@@ -521,7 +521,7 @@ const Server = struct {
         const data = schedule.verifyData(self.suite, &key, self.transcript.peek().slice());
 
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.finished));
+        out.byte(@backingInt(tls.HandshakeType.finished));
         const body = out.mark();
         out.push(data.slice());
         if (self.fault.bad_finished) out.data[body + 3] ^= 0x01;
@@ -552,14 +552,14 @@ fn findKeyShare(hello: []const u8) ?[]const u8 {
         const len = std.mem.readInt(u16, extensions[at + 2 ..][0..2], .big);
         const body = extensions[at + 4 ..][0..len];
         at += 4 + len;
-        if (kind != @intFromEnum(tls.ExtensionType.key_share)) continue;
+        if (kind != @backingInt(tls.ExtensionType.key_share)) continue;
         const list_len = std.mem.readInt(u16, body[0..2], .big);
         var share_at: usize = 2;
         while (share_at + 4 <= 2 + list_len) {
             const group = std.mem.readInt(u16, body[share_at..][0..2], .big);
             const key_len = std.mem.readInt(u16, body[share_at + 2 ..][0..2], .big);
             const key = body[share_at + 4 ..][0..key_len];
-            if (group == @intFromEnum(tls.NamedGroup.x25519)) return key;
+            if (group == @backingInt(tls.NamedGroup.x25519)) return key;
             share_at += 4 + key_len;
         }
     }
@@ -570,7 +570,7 @@ fn findKeyShare(hello: []const u8) ?[]const u8 {
 /// shaped like one.
 fn extensionsOf(hello: []const u8) ?[]const u8 {
     if (hello.len < 4) return null;
-    if (hello[0] != @intFromEnum(tls.HandshakeType.client_hello)) return null;
+    if (hello[0] != @backingInt(tls.HandshakeType.client_hello)) return null;
     const body_len = (@as(usize, hello[1]) << 16) | (@as(usize, hello[2]) << 8) | hello[3];
     if (4 + body_len != hello.len) return null;
     var at: usize = 4 + 2 + 32;
@@ -594,7 +594,7 @@ fn hasExtension(hello: []const u8, kind: tls.ExtensionType) bool {
     while (at + 4 <= extensions.len) {
         const found = std.mem.readInt(u16, extensions[at..][0..2], .big);
         const len = std.mem.readInt(u16, extensions[at + 2 ..][0..2], .big);
-        if (found == @intFromEnum(kind)) return true;
+        if (found == @backingInt(kind)) return true;
         at += 4 + len;
     }
     return false;
@@ -607,7 +607,7 @@ fn extensionBody(hello: []const u8, kind: tls.ExtensionType) ?[]const u8 {
     while (at + 4 <= extensions.len) {
         const found = std.mem.readInt(u16, extensions[at..][0..2], .big);
         const len = std.mem.readInt(u16, extensions[at + 2 ..][0..2], .big);
-        if (found == @intFromEnum(kind)) return extensions[at + 4 ..][0..len];
+        if (found == @backingInt(kind)) return extensions[at + 4 ..][0..len];
         at += 4 + len;
     }
     return null;
@@ -744,7 +744,7 @@ test "the client hello offers TLS 1.3 alone and the three QUIC suites" {
     try testing.expectEqual(@as(usize, 3), versions.len);
     try testing.expectEqual(@as(u8, 2), versions[0]);
     try testing.expectEqual(
-        @as(u16, @intFromEnum(tls.ProtocolVersion.tls_1_3)),
+        @as(u16, @backingInt(tls.ProtocolVersion.tls_1_3)),
         std.mem.readInt(u16, versions[1..3], .big),
     );
 
@@ -755,9 +755,9 @@ test "the client hello offers TLS 1.3 alone and the three QUIC suites" {
     try testing.expectEqual(@as(usize, 3 * 2), suites_len);
     var index: usize = 0;
     while (index < 3) : (index += 1) {
-        const code: tls.CipherSuite = @enumFromInt(
+        const code: tls.CipherSuite = @fromBackingInt(@intCast(
             std.mem.readInt(u16, hello[at + 2 + index * 2 ..][0..2], .big),
-        );
+        ));
         try testing.expect(schedule.suiteOf(code) != null);
     }
 }
@@ -1276,7 +1276,7 @@ test "a session ticket after the handshake is read and dropped" {
     // RFC 8446 section 4.6.1. Nothing here resumes a session, so the
     // ticket is stepped over rather than refused.
     var ticket: Buf(64) = .{};
-    ticket.byte(@intFromEnum(tls.HandshakeType.new_session_ticket));
+    ticket.byte(@backingInt(tls.HandshakeType.new_session_ticket));
     const body = ticket.mark();
     ticket.int(u32, 7200); // ticket_lifetime
     ticket.int(u32, 0); // ticket_age_add
@@ -1592,7 +1592,7 @@ test "a server that asks for a client certificate gets an empty one" {
         flight[0..Handshake.empty_certificate.len],
     );
     try testing.expectEqual(
-        @as(u8, @intFromEnum(tls.HandshakeType.finished)),
+        @as(u8, @backingInt(tls.HandshakeType.finished)),
         flight[Handshake.empty_certificate.len],
     );
 }
@@ -1602,14 +1602,14 @@ test "a host name too long for the extension is said and not swallowed" {
     // certificate check still ran on the full host, so it was not a
     // bypass, but a recovery nobody can see is not a recovery.
     var run: Run = .{};
-    const long = "a" ** 256;
+    const long: []const u8 = &@as([256]u8, @splat('a'));
     try testing.expectError(
         error.TlsServerNameTooLong,
         Handshake.init(run.options(.{ .explicit = long }, .no_verification)),
     );
 
     // One byte shorter still fits, and the name goes out.
-    const fits = "b" ** 255;
+    const fits: []const u8 = &@as([255]u8, @splat('b'));
     var hs: Handshake = try .init(run.options(.{ .explicit = fits }, .no_verification));
     defer hs.deinit();
     const body = extensionBody(hs.pendingCrypto(.initial), .server_name).?;
@@ -1798,13 +1798,13 @@ test "session tickets keep arriving past the application buffer" {
     defer hs.deinit();
 
     var ticket: Buf(1024) = .{};
-    ticket.byte(@intFromEnum(tls.HandshakeType.new_session_ticket));
+    ticket.byte(@backingInt(tls.HandshakeType.new_session_ticket));
     const body = ticket.mark();
     ticket.int(u32, 7200); // ticket_lifetime
     ticket.int(u32, 0); // ticket_age_add
     ticket.byte(0); // ticket_nonce
     ticket.int(u16, 512); // ticket
-    ticket.push(&[_]u8{0x5a} ** 512);
+    ticket.push(&@as([512]u8, @splat(0x5a)));
     ticket.int(u16, 0); // extensions
     ticket.wrapLen(body, 3);
 
@@ -1831,7 +1831,7 @@ test "a second CertificateRequest is refused" {
     defer hs.deinit();
 
     var request: Buf(64) = .{};
-    request.byte(@intFromEnum(tls.HandshakeType.certificate_request));
+    request.byte(@backingInt(tls.HandshakeType.certificate_request));
     request.push(&.{ 0, 0, 3, 0, 0, 0 });
     try testing.expectError(
         error.TlsUnexpectedMessage,

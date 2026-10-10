@@ -236,12 +236,13 @@ test "a 3-bit length prefix that fills up carries the length on into more octets
     try testing.expectEqualSlices(u8, &.{ 0x27, 0x00 }, encode(4, 0x20, "abcdefg", .raw, &out)[0..2]);
     try testing.expectEqualSlices(u8, &.{ 0x27, 0x01 }, encode(4, 0x20, "abcdefgh", .raw, &out)[0..2]);
 
-    const longer = encode(4, 0x20, "a" ** 300, .raw, &out);
+    const text: [300]u8 = @splat('a');
+    const longer = encode(4, 0x20, &text, .raw, &out);
     try testing.expectEqualSlices(u8, &.{ 0x27, 0xa5, 0x02 }, longer[0..3]);
 
     const got = try decode(4, testing.allocator, longer, 512);
     defer testing.allocator.free(got.text);
-    try testing.expectEqualStrings("a" ** 300, got.text);
+    try testing.expectEqualStrings(&text, got.text);
 }
 
 test "a Huffman literal sets the H flag wherever the flag sits" {
@@ -294,7 +295,7 @@ test "a spread of strings round-trips at every prefix width and both codings" {
         "Mon, 21 Oct 2013 20:13:21 GMT",
         "foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1",
         "\x00\x01\x02\xfe\xff",
-        "a" ** 300,
+        &@as([300]u8, @splat('a')),
     };
     var out: [1024]u8 = undefined;
     for (cases) |text| {
@@ -325,7 +326,7 @@ test "a length that runs past the section is truncated, not read past" {
 
 test "a length larger than this build holds is refused before it is used" {
     // 0x7f then nine continuation octets that carry 63 bits of ones.
-    const over = [_]u8{0x7f} ++ [_]u8{0xff} ** 8 ++ [_]u8{0x7f};
+    const over = [_]u8{0x7f} ++ @as([8]u8, @splat(0xff)) ++ [_]u8{0x7f};
     try testing.expectError(error.IntegerOverflow, decode(8, testing.allocator, &over, 64));
 }
 

@@ -56,7 +56,7 @@ pub const MinVersion = enum {
     /// `--tlsv1.x` keeps the highest, the way curl keeps the last word of
     /// a set of bounds that only ever tighten.
     pub fn max(a: MinVersion, b: MinVersion) MinVersion {
-        return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
+        return if (@backingInt(a) >= @backingInt(b)) a else b;
     }
 
     /// The name a message prints, the way curl spells it.
@@ -120,7 +120,7 @@ pub const Version = enum {
     /// else and have it read as permitted.
     pub fn permits(max: Version, version: std.crypto.tls.ProtocolVersion) bool {
         return switch (version) {
-            .tls_1_2 => @intFromEnum(max) >= @intFromEnum(Version.tls_1_2),
+            .tls_1_2 => @backingInt(max) >= @backingInt(Version.tls_1_2),
             .tls_1_3 => max == .tls_1_3,
             else => false,
         };

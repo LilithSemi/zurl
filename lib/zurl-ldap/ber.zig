@@ -55,7 +55,7 @@ pub const Tag = struct {
 
     /// The one byte this tag writes. X.690 clause 8.1.2.
     pub fn byte(t: Tag) u8 {
-        return (@as(u8, @intFromEnum(t.class)) << 6) |
+        return (@as(u8, @backingInt(t.class)) << 6) |
             (@as(u8, @intFromBool(t.constructed)) << 5) |
             @as(u8, t.number);
     }
@@ -66,7 +66,7 @@ pub const Tag = struct {
         const number: u5 = @truncate(b);
         if (number == 0x1f) return null;
         return .{
-            .class = @enumFromInt(@as(u2, @truncate(b >> 6))),
+            .class = @fromBackingInt(@intCast(@as(u2, @truncate(b >> 6)))),
             .constructed = (b & 0x20) != 0,
             .number = number,
         };
@@ -379,10 +379,8 @@ pub fn integerValue(comptime T: type, e: Element) ReadError!T {
 /// endian number.
 fn readSigned(comptime T: type, octets: []const u8) T {
     const negative = octets[0] & 0x80 != 0;
-    var value: std.meta.Int(.unsigned, @bitSizeOf(T)) = if (negative)
-        std.math.maxInt(std.meta.Int(.unsigned, @bitSizeOf(T)))
-    else
-        0;
+    const Unsigned = @Int(.unsigned, @bitSizeOf(T));
+    var value: Unsigned = if (negative) std.math.maxInt(Unsigned) else 0;
     for (octets) |b| {
         value = (value << 8) | b;
     }
@@ -904,9 +902,9 @@ test "a container whose content passes 127 bytes gets a wider length field" {
     // moves the content along. The content must survive the move byte for
     // byte.
     var w: Writer(1024, 4) = .init();
-    const value = "x" ** 200;
+    const value: [200]u8 = @splat('x');
     try w.beginElement(sequence);
-    try w.writeElement(octet_string, value);
+    try w.writeElement(octet_string, &value);
     try w.endElement();
 
     const out = w.written();
@@ -919,26 +917,26 @@ test "a container whose content passes 127 bytes gets a wider length field" {
     var c: Cursor = .init(out);
     const seq = try c.expect(sequence);
     var inner = try c.enter(seq);
-    try testing.expectEqualStrings(value, (try inner.expect(octet_string)).content);
+    try testing.expectEqualStrings(&value, (try inner.expect(octet_string)).content);
 }
 
 test "a container of over 65535 bytes still round-trips through the reader" {
     var w: Writer(200_000, 4) = .init();
-    const value = "y" ** 70_000;
+    const value: [70_000]u8 = @splat('y');
     try w.beginElement(sequence);
-    try w.writeElement(octet_string, value);
+    try w.writeElement(octet_string, &value);
     try w.endElement();
 
     var c: Cursor = .init(w.written());
     const seq = try c.expect(sequence);
     var inner = try c.enter(seq);
-    try testing.expectEqualStrings(value, (try inner.expect(octet_string)).content);
+    try testing.expectEqualStrings(&value, (try inner.expect(octet_string)).content);
 }
 
 test "a writer that runs out of room reports it and writes nothing past the end" {
     var w: Writer(16, 4) = .init();
     try w.beginElement(sequence);
-    try testing.expectError(error.NoRoom, w.writeElement(octet_string, "x" ** 32));
+    try testing.expectError(error.NoRoom, w.writeElement(octet_string, &@as([32]u8, @splat('x'))));
     // The capacity is a bound and not a suggestion.
     try testing.expect(w.len <= 16);
 }

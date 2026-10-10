@@ -634,10 +634,10 @@ test "a fresh session holds the Initial keys of RFC 9001 appendix A" {
 }
 
 test "each level has its own packet number space and each number is issued once" {
-    var session: Session = .init(&[_]u8{0x01} ** 8);
+    var session: Session = .init(&@as([8]u8, @splat(0x01)));
     session.setHandshakeKeys(.aes_128_gcm, &.{
-        .client = .from(&[_]u8{0x11} ** 32),
-        .server = .from(&[_]u8{0x22} ** 32),
+        .client = .from(&@as([32]u8, @splat(0x11))),
+        .server = .from(&@as([32]u8, @splat(0x22))),
     });
 
     try testing.expectEqual(@as(u64, 0), try session.nextPacketNumber(.initial));
@@ -652,7 +652,7 @@ test "each level has its own packet number space and each number is issued once"
 }
 
 test "a level with no key update stops at the AEAD confidentiality limit" {
-    var session: Session = .init(&[_]u8{0x02} ** 8);
+    var session: Session = .init(&@as([8]u8, @splat(0x02)));
     // Step the space to one below the limit, which a test cannot reach by
     // sending 2^23 packets.
     session.spaces[0].next = confidentialityLimit(.aes_128_gcm) - 1;
@@ -666,10 +666,10 @@ test "the AEAD limit of a level comes from that level's own suite" {
     // whatever TLS goes on to negotiate. So a connection that settled on
     // ChaCha20-Poly1305 still holds the Initial level to the 2^23 bound
     // of AES-GCM and not to the far larger ChaCha20 one.
-    var session: Session = .init(&[_]u8{0x09} ** 8);
+    var session: Session = .init(&@as([8]u8, @splat(0x09)));
     session.setHandshakeKeys(.chacha20_poly1305, &.{
-        .client = .from(&[_]u8{0xdd} ** 32),
-        .server = .from(&[_]u8{0xee} ** 32),
+        .client = .from(&@as([32]u8, @splat(0xdd))),
+        .server = .from(&@as([32]u8, @splat(0xee))),
     });
     try testing.expectEqual(protection.Suite.chacha20_poly1305, session.suite);
     try testing.expectEqual(protection.Suite.aes_128_gcm, session.writeKeys(.initial).?.suite);
@@ -684,10 +684,10 @@ test "the AEAD limit of a level comes from that level's own suite" {
 }
 
 test "the application level asks for a key update at the same limit" {
-    var session: Session = .init(&[_]u8{0x03} ** 8);
+    var session: Session = .init(&@as([8]u8, @splat(0x03)));
     session.setApplicationKeys(.aes_128_gcm, &.{
-        .client = .from(&[_]u8{0x33} ** 32),
-        .server = .from(&[_]u8{0x44} ** 32),
+        .client = .from(&@as([32]u8, @splat(0x33))),
+        .server = .from(&@as([32]u8, @splat(0x44))),
     });
     session.handshake_confirmed = true;
 
@@ -725,7 +725,7 @@ test "ChaCha20-Poly1305 has a confidentiality limit the space reaches first" {
 }
 
 test "enough packets that fail to open closes the connection" {
-    var session: Session = .init(&[_]u8{0x04} ** 8);
+    var session: Session = .init(&@as([8]u8, @splat(0x04)));
     // One below the ChaCha20 limit, which is the low one.
     session.suite = .chacha20_poly1305;
     session.failed_opens = integrityLimit(.chacha20_poly1305) - 2;
@@ -734,10 +734,10 @@ test "enough packets that fail to open closes the connection" {
 }
 
 test "a key update changes both keys and flips the phase" {
-    var session: Session = .init(&[_]u8{0x05} ** 8);
+    var session: Session = .init(&@as([8]u8, @splat(0x05)));
     session.setApplicationKeys(.aes_128_gcm, &.{
-        .client = .from(&[_]u8{0x55} ** 32),
-        .server = .from(&[_]u8{0x66} ** 32),
+        .client = .from(&@as([32]u8, @splat(0x55))),
+        .server = .from(&@as([32]u8, @splat(0x66))),
     });
 
     // RFC 9001 section 6 bars an update before the handshake is
@@ -772,10 +772,10 @@ test "a key update changes both keys and flips the phase" {
 }
 
 test "a packet in the phase the peer started opens under the next generation" {
-    var session: Session = .init(&[_]u8{0x06} ** 8);
+    var session: Session = .init(&@as([8]u8, @splat(0x06)));
     session.setApplicationKeys(.aes_128_gcm, &.{
-        .client = .from(&[_]u8{0x77} ** 32),
-        .server = .from(&[_]u8{0x88} ** 32),
+        .client = .from(&@as([32]u8, @splat(0x77))),
+        .server = .from(&@as([32]u8, @splat(0x88))),
     });
     session.handshakeDone();
 
@@ -795,7 +795,7 @@ test "a packet in the phase the peer started opens under the next generation" {
 }
 
 test "the two directions never share a key at any level" {
-    var session: Session = .init(&[_]u8{0x07} ** 8);
+    var session: Session = .init(&@as([8]u8, @splat(0x07)));
     try testing.expect(!std.mem.eql(
         u8,
         session.writeKeys(.initial).?.keySlice(),
@@ -803,8 +803,8 @@ test "the two directions never share a key at any level" {
     ));
 
     session.setHandshakeKeys(.aes_256_gcm, &.{
-        .client = .from(&[_]u8{0x99} ** 48),
-        .server = .from(&[_]u8{0xaa} ** 48),
+        .client = .from(&@as([48]u8, @splat(0x99))),
+        .server = .from(&@as([48]u8, @splat(0xaa))),
     });
     try testing.expect(!std.mem.eql(
         u8,
@@ -816,10 +816,10 @@ test "the two directions never share a key at any level" {
 }
 
 test "dropping a level's keys leaves nothing behind" {
-    var session: Session = .init(&[_]u8{0x08} ** 8);
+    var session: Session = .init(&@as([8]u8, @splat(0x08)));
     session.setHandshakeKeys(.aes_128_gcm, &.{
-        .client = .from(&[_]u8{0xbb} ** 32),
-        .server = .from(&[_]u8{0xcc} ** 32),
+        .client = .from(&@as([32]u8, @splat(0xbb))),
+        .server = .from(&@as([32]u8, @splat(0xcc))),
     });
 
     session.dropInitialKeys();

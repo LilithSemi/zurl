@@ -88,16 +88,11 @@ const rows = [_]Row{
         .mapped = error.CouldNotConnect,
         .message = "the operating system returned a fault zurl cannot name",
     },
-    // The three below are refusals over `/etc/resolv.conf`, and each one
+    // The two below are refusals over `/etc/resolv.conf`, and each one
     // carries a sentence because the name of the fault alone does not say
-    // which line of the file to look at. All three mean the same thing to
-    // a script, exit 6, because the name did not resolve. See
+    // which line of the file to look at. Both mean the same thing to a
+    // script, exit 6, because the name did not resolve. See
     // `zurl-net/resolv.zig`.
-    .{
-        .err = error.ResolverSearchListTooLong,
-        .mapped = error.CouldNotResolveHost,
-        .message = "the search line of /etc/resolv.conf is longer than the resolver of this build can hold",
-    },
     .{
         .err = error.ResolverAttemptsZero,
         .mapped = error.CouldNotResolveHost,
@@ -466,6 +461,11 @@ const rows = [_]Row{
         .message = "the socket timed out during the TLS handshake",
     },
     .{
+        .err = error.ConnectionTimedOut,
+        .mapped = error.OperationTimedOut,
+        .message = "the peer stopped answering during the TLS handshake",
+    },
+    .{
         .err = error.SocketUnconnected,
         .mapped = error.SslConnectError,
         .message = "the socket was already shut down during the TLS handshake",
@@ -571,13 +571,13 @@ fn checkCovered(comptime set: type) void {
     // about sixty members against about sixty rows, and the default quota
     // of a thousand branches does not cover that product.
     @setEvalBranchQuota(30_000);
-    for (@typeInfo(set).error_set.?) |field| {
-        const err: anyerror = @field(set, field.name);
+    for (@typeInfo(set).error_set.error_names.?) |name| {
+        const err: anyerror = @field(set, name);
         var found = false;
         for (rows) |row| {
             if (row.err == err) found = true;
         }
-        if (!found) @compileError("zurl-net/errors.zig: error." ++ field.name ++ " has no row in `rows`");
+        if (!found) @compileError("zurl-net/errors.zig: error." ++ name ++ " has no row in `rows`");
     }
 }
 
@@ -789,8 +789,8 @@ test "every setup fault has a row, so none of them can fall through" {
     // The comptime check proves this at build time. This says the same
     // thing out loud, so a reader of the suite sees the rule without
     // reading the comptime block.
-    inline for (@typeInfo(SetupError).error_set.?) |field| {
-        const err: anyerror = @field(SetupError, field.name);
+    inline for (@typeInfo(SetupError).error_set.error_names.?) |name| {
+        const err: anyerror = @field(SetupError, name);
         try testing.expect(lookup(err) != null);
     }
 }
@@ -852,8 +852,8 @@ test "every reason TCP_NODELAY can fail carries a sentence" {
     // member has an arm. This proves each arm says something: a name such
     // as `OperationUnsupported` tells a user nothing about a slower
     // transfer, and the sentence is the only channel that can.
-    inline for (@typeInfo(tcp.NoDelayError).error_set.?) |field| {
-        const err: tcp.NoDelayError = @field(tcp.NoDelayError, field.name);
+    inline for (@typeInfo(tcp.NoDelayError).error_set.error_names.?) |name| {
+        const err: tcp.NoDelayError = @field(tcp.NoDelayError, name);
         const message = noDelayMessage(err);
         try testing.expect(message.len > 0);
         // The option is the one thing a user must be able to search for.
@@ -889,8 +889,8 @@ test "a host name over the bound is a resolve fault and a bad host is a url faul
 test "each host fault carries a sentence that says which one it is" {
     // The two exit codes send a user to two different places, and the
     // sentence is what says why. A shared sentence would undo the split.
-    inline for (@typeInfo(tcp.Host.InitError).error_set.?) |field| {
-        const err: tcp.Host.InitError = @field(tcp.Host.InitError, field.name);
+    inline for (@typeInfo(tcp.Host.InitError).error_set.error_names.?) |name| {
+        const err: tcp.Host.InitError = @field(tcp.Host.InitError, name);
         try testing.expect(hostInit(err).message.?.len > 0);
     }
     try testing.expect(!std.mem.eql(

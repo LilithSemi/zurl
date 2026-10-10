@@ -413,7 +413,7 @@ test "the buffer slides on every read, so a long stream fits a short buffer" {
     var offset: u64 = 0;
     var round: usize = 0;
     while (round < 200) : (round += 1) {
-        const text = [_]u8{@truncate(round)} ** 8;
+        const text: [8]u8 = @splat(@truncate(round));
         try stream.provide(offset, &text);
         try testing.expectEqualSlices(u8, &text, stream.available());
         stream.consume(text.len);

@@ -74,7 +74,7 @@ pub const Id = enum(u64) {
     /// True when RFC 9000 section 18.1 sets the identifier aside to
     /// exercise the rule that an unknown one is ignored.
     pub fn isReserved(self: Id) bool {
-        const n = @intFromEnum(self);
+        const n = @backingInt(self);
         return n >= 27 and (n - 27) % 31 == 0;
     }
 };
@@ -211,11 +211,11 @@ pub const DecodeError = error{
 /// section 18 requires. An identifier it does know may appear once.
 pub fn decode(bytes: []const u8) DecodeError!Parameters {
     var out: Parameters = .{};
-    var seen: std.EnumSet(KnownId) = .initEmpty();
+    var seen: std.EnumSet(KnownId) = .empty;
     var c: Cursor = .init(bytes);
 
     while (!c.isEmpty()) {
-        const id: Id = @enumFromInt(try c.takeVarint());
+        const id: Id = @fromBackingInt(@intCast(try c.takeVarint()));
         const length = try c.takeVarint();
         // **The bound, and it runs before the value is read.** A peer can
         // write 2^62 here for a two byte extension.
@@ -457,20 +457,20 @@ fn writeIntegerUnlessDefault(
     default: u64,
 ) EncodeError!void {
     if (value == default) return;
-    try varint.write(w, @intFromEnum(id));
+    try varint.write(w, @backingInt(id));
     try varint.write(w, try varint.encodedLen(value));
     try varint.write(w, value);
 }
 
 fn writeBytes(w: *std.Io.Writer, id: Id, value: []const u8) EncodeError!void {
-    try varint.write(w, @intFromEnum(id));
+    try varint.write(w, @backingInt(id));
     try varint.write(w, value.len);
     try w.writeAll(value);
 }
 
 fn writePreferredAddress(w: *std.Io.Writer, address: PreferredAddress) EncodeError!void {
     std.debug.assert(address.connection_id.len <= packet.max_connection_id_len);
-    try varint.write(w, @intFromEnum(Id.preferred_address));
+    try varint.write(w, @backingInt(Id.preferred_address));
     try varint.write(w, PreferredAddress.fixed_len + address.connection_id.len);
     try w.writeAll(&address.ipv4);
     try w.writeInt(u16, address.ipv4_port, .big);
@@ -586,9 +586,9 @@ test "an identifier this build does not know is stepped over" {
     const p = try decode(&bytes);
     try testing.expectEqual(@as(u64, 5), p.initial_max_data);
 
-    try testing.expect((@as(Id, @enumFromInt(27))).isReserved());
-    try testing.expect((@as(Id, @enumFromInt(58))).isReserved());
-    try testing.expect(!(@as(Id, @enumFromInt(0x04))).isReserved());
+    try testing.expect((@as(Id, @fromBackingInt(@intCast(27)))).isReserved());
+    try testing.expect((@as(Id, @fromBackingInt(@intCast(58)))).isReserved());
+    try testing.expect(!(@as(Id, @fromBackingInt(@intCast(0x04)))).isReserved());
 }
 
 test "one identifier twice is refused" {
@@ -665,7 +665,7 @@ test "a fixed width value at the wrong width is refused" {
     // no meaning to at all.
     try testing.expectError(error.BadParameterLength, decode(&.{ 0x0c, 0x01, 0x01 }));
     // A connection id above the 20 bytes of section 17.2.
-    var long = [_]u8{ 0x0f, 21 } ++ ([_]u8{0xaa} ** 21);
+    var long = [_]u8{ 0x0f, 21 } ++ @as([21]u8, @splat(0xaa));
     try testing.expectError(error.BadParameterLength, decode(&long));
     // An integer with a byte left over after its varint, where a peer
     // could hide a second number.

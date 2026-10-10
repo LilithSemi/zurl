@@ -4557,8 +4557,8 @@ const SharedRun = struct {
         if (self.fault) |err| return err;
         const body = self.body orelse return error.NoBody;
         switch (self.status) {
-            200 => try testing.expectEqualStrings("a" ** 400, body),
-            201 => try testing.expectEqualStrings("b" ** 400, body),
+            200 => try testing.expectEqualStrings(&@as([400]u8, @splat('a')), body),
+            201 => try testing.expectEqualStrings(&@as([400]u8, @splat('b')), body),
             else => return error.UnexpectedStatus,
         }
     }
@@ -4582,12 +4582,12 @@ test "two tasks drive one shared session, and neither reads the other's body" {
     try server.startWith(&.{
         .{
             .fields = &.{.{ .name = ":status", .value = "200" }},
-            .body = "a" ** 400,
+            .body = &@as([400]u8, @splat('a')),
             .head_only_first = true,
         },
         .{
             .fields = &.{.{ .name = ":status", .value = "201" }},
-            .body = "b" ** 400,
+            .body = &@as([400]u8, @splat('b')),
         },
     }, .{ .interleave = true, .requests_per_connection = 2 });
     defer server.stop();
@@ -4955,7 +4955,7 @@ test "the connection window is held only for the octets an inbox holds" {
 
     // A frame of 100 octets whose payload is 90, so 10 octets of padding.
     // 90 go to the inbox and 10 are spent now.
-    try stream.inbox.appendSlice(testing.allocator, &[_]u8{'x'} ** 90);
+    try stream.inbox.appendSlice(testing.allocator, &@as([90]u8, @splat('x')));
     try session.creditReceive(100, &stream, 90);
     try testing.expectEqual(@as(u32, 10), session.recv_owed);
     // The stream window is credited for the whole frame either way: it
@@ -5044,8 +5044,8 @@ test "every fault of the frame layer and of HPACK reaches a name the seam knows"
     // Every fault of the frame layer lands somewhere. The set is closed,
     // so a new one that nothing maps would fail this walk rather than
     // reach a user as a name that says nothing.
-    inline for (@typeInfo(Fault).error_set.?) |member| {
-        const mapped = openError(@field(anyerror, member.name));
+    inline for (@typeInfo(Fault).error_set.error_names.?) |name| {
+        const mapped = openError(@field(anyerror, name));
         try testing.expect(mapped != engine.OpenError.Unexpected);
     }
 }
@@ -5720,14 +5720,14 @@ test "the read deadline is on one read and not on the transfer" {
     // That is why curl ships `--speed-limit` and `--speed-time` as a pair
     // rather than one total.
     const gpa = testing.allocator;
-    const body = "0123456789" ** 400;
+    const body: [4000]u8 = @bitCast(@as([400][10]u8, @splat("0123456789".*)));
     var server: h2_test_server.H2TestServer = undefined;
     try server.start(&.{.{
         .fields = &.{
             .{ .name = ":status", .value = "200" },
             .{ .name = "content-length", .value = "4000" },
         },
-        .body = body,
+        .body = &body,
     }});
     defer server.stop();
 
@@ -5739,7 +5739,7 @@ test "the read deadline is on one read and not on the transfer" {
     defer exchange.close();
     const got = try readBody(exchange);
     defer gpa.free(got);
-    try testing.expectEqualStrings(body, got);
+    try testing.expectEqualStrings(&body, got);
     try exchange.check();
     try testing.expect(!client.session.read_timed_out);
 }

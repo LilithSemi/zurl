@@ -54,7 +54,7 @@ pub const Id = enum(u8) {
 /// layer number. An empty payload is not a message.
 pub fn idOf(payload: []const u8) ?Id {
     if (payload.len == 0) return null;
-    return @enumFromInt(payload[0]);
+    return @fromBackingInt(@intCast(payload[0]));
 }
 
 /// Whether `id` belongs to the connection protocol.
@@ -169,7 +169,7 @@ pub fn writeOpenSession(
     max_packet: u32,
 ) BuildError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.channel_open));
+    try w.byte(@backingInt(Id.channel_open));
     try w.string(session_channel_type);
     try w.uint32(sender_channel);
     try w.uint32(initial_window);
@@ -197,7 +197,7 @@ pub const OpenConfirmation = struct {
 /// Reads a `SSH_MSG_CHANNEL_OPEN_CONFIRMATION`.
 pub fn parseOpenConfirmation(payload: []const u8) ParseError!OpenConfirmation {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.channel_open_confirmation)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.channel_open_confirmation)) return error.WrongMessage;
     const out: OpenConfirmation = .{
         .recipient_channel = try r.uint32(),
         .sender_channel = try r.uint32(),
@@ -224,10 +224,10 @@ pub const OpenFailure = struct {
 /// Reads a `SSH_MSG_CHANNEL_OPEN_FAILURE`.
 pub fn parseOpenFailure(payload: []const u8) ParseError!OpenFailure {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.channel_open_failure)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.channel_open_failure)) return error.WrongMessage;
     const out: OpenFailure = .{
         .recipient_channel = try r.uint32(),
-        .reason = @enumFromInt(try r.uint32()),
+        .reason = @fromBackingInt(@intCast(try r.uint32())),
         .description = try r.string(),
         .language = try r.string(),
     };
@@ -242,7 +242,7 @@ pub fn parseOpenFailure(payload: []const u8) ParseError!OpenFailure {
 /// checks neither, because it has no channel to read them from.
 pub fn writeData(out: []u8, recipient_channel: u32, data: []const u8) BuildError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.channel_data));
+    try w.byte(@backingInt(Id.channel_data));
     try w.uint32(recipient_channel);
     try w.string(data);
     return w.written();
@@ -258,7 +258,7 @@ pub const Data = struct {
 /// Reads a `SSH_MSG_CHANNEL_DATA`.
 pub fn parseData(payload: []const u8) ParseError!Data {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.channel_data)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.channel_data)) return error.WrongMessage;
     const out: Data = .{
         .recipient_channel = try r.uint32(),
         .bytes = try r.string(),
@@ -280,10 +280,10 @@ pub const ExtendedData = struct {
 /// Reads a `SSH_MSG_CHANNEL_EXTENDED_DATA`.
 pub fn parseExtendedData(payload: []const u8) ParseError!ExtendedData {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.channel_extended_data)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.channel_extended_data)) return error.WrongMessage;
     const out: ExtendedData = .{
         .recipient_channel = try r.uint32(),
-        .kind = @enumFromInt(try r.uint32()),
+        .kind = @fromBackingInt(@intCast(try r.uint32())),
         .bytes = try r.string(),
     };
     if (!r.atEnd()) return error.TrailingBytes;
@@ -293,7 +293,7 @@ pub fn parseExtendedData(payload: []const u8) ParseError!ExtendedData {
 /// Writes `SSH_MSG_CHANNEL_WINDOW_ADJUST`, RFC 4254 section 5.2.
 pub fn writeWindowAdjust(out: []u8, recipient_channel: u32, add: u32) BuildError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.channel_window_adjust));
+    try w.byte(@backingInt(Id.channel_window_adjust));
     try w.uint32(recipient_channel);
     try w.uint32(add);
     return w.written();
@@ -311,7 +311,7 @@ pub const WindowAdjust = struct {
 /// Reads a `SSH_MSG_CHANNEL_WINDOW_ADJUST`.
 pub fn parseWindowAdjust(payload: []const u8) ParseError!WindowAdjust {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.channel_window_adjust)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.channel_window_adjust)) return error.WrongMessage;
     const out: WindowAdjust = .{
         .recipient_channel = try r.uint32(),
         .add = try r.uint32(),
@@ -349,13 +349,13 @@ pub fn writeChannelFailure(out: []u8, recipient_channel: u32) BuildError![]u8 {
 /// hears back waits for as long as it likes.
 pub fn writeGlobalFailure(out: []u8) BuildError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.request_failure));
+    try w.byte(@backingInt(Id.request_failure));
     return w.written();
 }
 
 fn writeChannelOnly(out: []u8, id: Id, recipient_channel: u32) BuildError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(id));
+    try w.byte(@backingInt(id));
     try w.uint32(recipient_channel);
     return w.written();
 }
@@ -420,7 +420,7 @@ pub fn writeEnv(
     want_reply: bool,
 ) BuildError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.channel_request));
+    try w.byte(@backingInt(Id.channel_request));
     try w.uint32(recipient_channel);
     try w.string(env_request);
     try w.boolean(want_reply);
@@ -437,7 +437,7 @@ fn writeRequest(
     argument: []const u8,
 ) BuildError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.channel_request));
+    try w.byte(@backingInt(Id.channel_request));
     try w.uint32(recipient_channel);
     try w.string(request);
     try w.boolean(want_reply);
@@ -463,7 +463,7 @@ pub const RequestHead = struct {
 /// Reads the head of a `SSH_MSG_CHANNEL_REQUEST`.
 pub fn parseRequestHead(payload: []const u8) ParseError!RequestHead {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.channel_request)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.channel_request)) return error.WrongMessage;
     return .{
         .recipient_channel = try r.uint32(),
         .request = try r.string(),
@@ -517,7 +517,7 @@ pub const GlobalRequestHead = struct {
 /// Reads the head of a `SSH_MSG_GLOBAL_REQUEST`.
 pub fn parseGlobalRequestHead(payload: []const u8) ParseError!GlobalRequestHead {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.global_request)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.global_request)) return error.WrongMessage;
     return .{
         .request = try r.string(),
         .want_reply = try r.boolean(),
@@ -541,7 +541,7 @@ pub const PeerOpenHead = struct {
 /// Reads the head of a peer's `SSH_MSG_CHANNEL_OPEN`.
 pub fn parsePeerOpenHead(payload: []const u8) ParseError!PeerOpenHead {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.channel_open)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.channel_open)) return error.WrongMessage;
     return .{
         .channel_type = try r.string(),
         .sender_channel = try r.uint32(),
@@ -561,9 +561,9 @@ pub fn writeOpenFailure(
     description: []const u8,
 ) BuildError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.channel_open_failure));
+    try w.byte(@backingInt(Id.channel_open_failure));
     try w.uint32(recipient_channel);
-    try w.uint32(@intFromEnum(reason));
+    try w.uint32(@backingInt(reason));
     try w.string(description);
     try w.string("");
     return w.written();
@@ -671,7 +671,7 @@ test "an open failure keeps its reason and its untrusted description" {
 
     // A number RFC 4254 does not assign parses and has no sentence of
     // zurl's own. It is not a fault: section 5.1 keeps a private range.
-    const private: OpenFailureReason = @enumFromInt(0xFE000001);
+    const private: OpenFailureReason = @fromBackingInt(@intCast(0xFE000001));
     try testing.expectEqual(@as(?[]const u8, null), private.text());
 }
 

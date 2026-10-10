@@ -71,7 +71,7 @@ pub const Version = enum(u32) {
     /// A peer sends one of these on purpose, so it is a value and never a
     /// fault.
     pub fn isReserved(self: Version) bool {
-        return @intFromEnum(self) & 0x0f0f_0f0f == 0x0a0a_0a0a;
+        return @backingInt(self) & 0x0f0f_0f0f == 0x0a0a_0a0a;
     }
 };
 
@@ -181,7 +181,7 @@ pub const LongType = enum(u2) {
 /// The caller must have checked the version first. Nothing in the two
 /// bits says which version numbering they belong to.
 pub fn longType(first_byte: u8) LongType {
-    return @enumFromInt(@as(u2, @truncate(first_byte >> 4)));
+    return @fromBackingInt(@intCast(@as(u2, @truncate(first_byte >> 4))));
 }
 
 /// How many bytes the Packet Number field takes. RFC 9000 section 17.1.
@@ -255,7 +255,7 @@ pub fn parseInvariant(datagram: []const u8) ParseError!Invariant {
     const first_byte = try c.takeByte();
     if (form(first_byte) != .long) return error.WrongHeaderForm;
 
-    const version: Version = @enumFromInt(std.mem.readInt(u32, try c.takeArray(4), .big));
+    const version: Version = @fromBackingInt(@intCast(std.mem.readInt(u32, try c.takeArray(4), .big)));
 
     const dcid_len = try c.takeByte();
     const dcid = try ConnectionId.init(try c.take(dcid_len));
@@ -492,7 +492,7 @@ pub const VersionNegotiation = struct {
     /// meet a bound that is still there.
     pub fn get(self: VersionNegotiation, index: usize) ParseError!Version {
         if (index >= self.count()) return error.NoSuchVersion;
-        return @enumFromInt(std.mem.readInt(u32, self.versions[index * 4 ..][0..4], .big));
+        return @fromBackingInt(@intCast(std.mem.readInt(u32, self.versions[index * 4 ..][0..4], .big)));
     }
 
     /// True when the server offered `wanted`.
@@ -860,8 +860,8 @@ test "a connection id longer than 20 bytes is refused, not held" {
     datagram[4] = 0x01;
     datagram[5] = 21;
     try testing.expectError(error.ConnectionIdTooLong, parseLong(&datagram));
-    try testing.expectError(error.ConnectionIdTooLong, ConnectionId.init(&([_]u8{0} ** 21)));
-    try testing.expectEqual(@as(u8, 20), (try ConnectionId.init(&([_]u8{7} ** 20))).len);
+    try testing.expectError(error.ConnectionIdTooLong, ConnectionId.init(&@as([21]u8, @splat(0))));
+    try testing.expectEqual(@as(u8, 20), (try ConnectionId.init(&@as([20]u8, @splat(7)))).len);
 }
 
 test "a long header with the Fixed Bit clear is refused" {
@@ -896,7 +896,7 @@ test "a Version Negotiation packet lists whole versions and never a part of one"
     try testing.expectEqual(Version.v1, try vn.get(0));
     try testing.expectEqual(Version.v2, try vn.get(1));
     try testing.expect(vn.has(.v1));
-    try testing.expect(!vn.has(@enumFromInt(0xdeadbeef)));
+    try testing.expect(!vn.has(@fromBackingInt(@intCast(0xdeadbeef))));
 
     // **The bound on the index is a returned error and not an assert.**
     // `get` is public and a release build strips asserts, so an index the
@@ -951,8 +951,8 @@ test "the first byte splits into the fields RFC 9000 sections 17.2 and 17.3 name
 test "the reserved version pattern is a value and never a fault" {
     // RFC 9000 section 15 sets aside `0x?a?a?a?a` so a peer can force
     // version negotiation on purpose.
-    try testing.expect((@as(Version, @enumFromInt(0x0a0a0a0a))).isReserved());
-    try testing.expect((@as(Version, @enumFromInt(0x1a2a3a4a))).isReserved());
+    try testing.expect((@as(Version, @fromBackingInt(@intCast(0x0a0a0a0a)))).isReserved());
+    try testing.expect((@as(Version, @fromBackingInt(@intCast(0x1a2a3a4a)))).isReserved());
     try testing.expect(!Version.v1.isReserved());
     try testing.expect(!Version.v2.isReserved());
     // Reserved and supported are different questions. Version 1 is the

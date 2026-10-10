@@ -3,7 +3,7 @@
 //!
 //! **A message number off the wire is an untrusted integer.** `Id` is a
 //! non-exhaustive enum for that reason, and `idOf` uses
-//! `std.enums.fromInt`. A `@enumFromInt` on a byte the peer chose is
+//! `std.enums.fromInt`. A `@fromBackingInt` on a byte the peer chose is
 //! undefined behaviour for every value this build does not name, and a
 //! peer can write all 256 of them.
 //!
@@ -56,7 +56,7 @@ pub const Id = enum(u8) {
 /// all.
 pub fn idOf(payload: []const u8) ?Id {
     if (payload.len == 0) return null;
-    return @enumFromInt(payload[0]);
+    return @fromBackingInt(@intCast(payload[0]));
 }
 
 /// Whether the transport answers this message itself.
@@ -116,9 +116,9 @@ pub const Disconnect = struct {
 /// Reads a `SSH_MSG_DISCONNECT`.
 pub fn parseDisconnect(payload: []const u8) ParseError!Disconnect {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.disconnect)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.disconnect)) return error.WrongMessage;
     return .{
-        .reason = @enumFromInt(try r.uint32()),
+        .reason = @fromBackingInt(@intCast(try r.uint32())),
         .description = try r.string(),
         // RFC 4253 section 11.1 puts a language tag last. Some servers
         // leave it off, so a payload that ends here reads as an empty tag
@@ -140,7 +140,7 @@ pub const Debug = struct {
 /// Reads a `SSH_MSG_DEBUG`.
 pub fn parseDebug(payload: []const u8) ParseError!Debug {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.debug)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.debug)) return error.WrongMessage;
     return .{
         .always_display = try r.boolean(),
         .message = try r.string(),
@@ -152,7 +152,7 @@ pub fn parseDebug(payload: []const u8) ParseError!Debug {
 /// packet the peer did not understand, RFC 4253 section 11.4.
 pub fn parseUnimplemented(payload: []const u8) ParseError!u32 {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(Id.unimplemented)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(Id.unimplemented)) return error.WrongMessage;
     return r.uint32();
 }
 
@@ -165,8 +165,8 @@ pub fn writeDisconnect(
     description: []const u8,
 ) wire.WriteError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.disconnect));
-    try w.uint32(@intFromEnum(reason));
+    try w.byte(@backingInt(Id.disconnect));
+    try w.uint32(@backingInt(reason));
     try w.string(description);
     try w.string("");
     return w.written();
@@ -175,7 +175,7 @@ pub fn writeDisconnect(
 /// Builds a `SSH_MSG_UNIMPLEMENTED` for the packet numbered `sequence`.
 pub fn writeUnimplemented(out: []u8, sequence: u32) wire.WriteError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(Id.unimplemented));
+    try w.byte(@backingInt(Id.unimplemented));
     try w.uint32(sequence);
     return w.written();
 }
@@ -183,11 +183,11 @@ pub fn writeUnimplemented(out: []u8, sequence: u32) wire.WriteError![]u8 {
 const testing = std.testing;
 
 test "a message number the peer invented is read and never used as a tag" {
-    // **`@enumFromInt` on a non-exhaustive enum is defined for every
+    // **`@fromBackingInt` on a non-exhaustive enum is defined for every
     // value.** The switch below must therefore have an else arm, and the
     // peer can reach it with any of the numbers this build does not name.
     const id = idOf(&.{0xfe}).?;
-    try testing.expectEqual(@as(u8, 0xfe), @intFromEnum(id));
+    try testing.expectEqual(@as(u8, 0xfe), @backingInt(id));
     try testing.expect(!isTransportHousekeeping(id));
     try testing.expectEqual(@as(?Id, null), idOf(""));
     try testing.expectEqual(Id.kexinit, idOf(&.{ 20, 1, 2 }).?);
@@ -208,7 +208,7 @@ test "a DISCONNECT reads its reason and its description" {
 test "a DISCONNECT with a reason nobody named still reads" {
     const payload = "\x01\x00\x00\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00";
     const message = try parseDisconnect(payload);
-    try testing.expectEqual(@as(u32, 0xffff), @intFromEnum(message.reason));
+    try testing.expectEqual(@as(u32, 0xffff), @backingInt(message.reason));
     try testing.expectEqualStrings("", message.description);
 }
 

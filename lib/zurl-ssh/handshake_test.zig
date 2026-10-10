@@ -522,7 +522,7 @@ test "a changed byte in an encrypted packet fails the tag" {
     // the tag is what refuses it.
     var f = try Fixture.start(.{
         .cipher_names = "aes256-gcm@openssh.com",
-        .raw_after_handshake = "\x00\x00\x00\x10" ++ ("\x00" ** 16) ++ ("\x00" ** 16),
+        .raw_after_handshake = "\x00\x00\x00\x10" ++ &@as([16]u8, @splat(0)) ++ &@as([16]u8, @splat(0)),
     }, .{});
     defer f.stop();
 

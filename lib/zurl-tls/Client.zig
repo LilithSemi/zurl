@@ -330,16 +330,16 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
     })) ++ tls.extension(.key_share, array(
         u16,
         u8,
-        int(u16, @intFromEnum(tls.NamedGroup.x25519_ml_kem768)) ++
+        int(u16, @backingInt(tls.NamedGroup.x25519_ml_kem768)) ++
             array(u16, u8, key_share.ml_kem768_kp.public_key.toBytes() ++ key_share.x25519_kp.public_key) ++
-            int(u16, @intFromEnum(tls.NamedGroup.secp256r1)) ++
+            int(u16, @backingInt(tls.NamedGroup.secp256r1)) ++
             array(u16, u8, key_share.secp256r1_kp.public_key.toUncompressedSec1()) ++
-            int(u16, @intFromEnum(tls.NamedGroup.secp384r1)) ++
+            int(u16, @backingInt(tls.NamedGroup.secp384r1)) ++
             array(u16, u8, key_share.secp384r1_kp.public_key.toUncompressedSec1()) ++
-            int(u16, @intFromEnum(tls.NamedGroup.x25519)) ++
+            int(u16, @backingInt(tls.NamedGroup.x25519)) ++
             array(u16, u8, key_share.x25519_kp.public_key),
     ));
-    const server_name_extension = int(u16, @intFromEnum(tls.ExtensionType.server_name)) ++
+    const server_name_extension = int(u16, @backingInt(tls.ExtensionType.server_name)) ++
         int(u16, 2 + 1 + 2 + host_len) ++ // byte length of this extension payload
         int(u16, 1 + 2 + host_len) ++ // server_name_list byte count
         .{0x00} ++ // name_type
@@ -359,19 +359,19 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
         server_name_extension;
 
     const client_hello =
-        int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
+        int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
         client_hello_rand ++
         [1]u8{32} ++ legacy_session_id ++
         cipher_suites ++
         array(u8, tls.CompressionMethod, .{.null}) ++
         extensions_header;
 
-    const out_handshake = .{@intFromEnum(tls.HandshakeType.client_hello)} ++
+    const out_handshake = .{@backingInt(tls.HandshakeType.client_hello)} ++
         int(u24, @intCast(client_hello.len - server_name_extension.len + server_name_extension_len + alpn_extension.len)) ++ // ZURL PATCH
         client_hello;
 
-    var cleartext_header_buf = .{@intFromEnum(tls.ContentType.handshake)} ++ // ZURL PATCH: `var`, for the block below.
-        int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_0)) ++
+    var cleartext_header_buf = .{@backingInt(tls.ContentType.handshake)} ++ // ZURL PATCH: `var`, for the block below.
+        int(u16, @backingInt(tls.ProtocolVersion.tls_1_0)) ++
         int(u16, @intCast(out_handshake.len - server_name_extension.len + server_name_extension_len + alpn_extension.len)) ++ // ZURL PATCH
         out_handshake;
 
@@ -400,7 +400,7 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
         const first_entry = cleartext_header_buf.len - server_name_extension.len - // ZURL PATCH
             extensions_payload.len + 2 + 2 + 1; // ZURL PATCH
         const offered = cleartext_header_buf[first_entry..][0..2]; // ZURL PATCH
-        assert(std.mem.readInt(u16, offered, .big) == @intFromEnum(tls.ProtocolVersion.tls_1_3)); // ZURL PATCH
+        assert(std.mem.readInt(u16, offered, .big) == @backingInt(tls.ProtocolVersion.tls_1_3)); // ZURL PATCH
         @memcpy(offered, &int(u16, grease_version)); // ZURL PATCH
     } // ZURL PATCH
 
@@ -502,22 +502,17 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
     var cleartext_fragment_end: usize = 0;
     var cleartext_bufs: [2][tls.max_ciphertext_inner_record_len]u8 = undefined;
     fragment: while (true) {
-        // Ensure the input buffer pointer is stable in this scope.
-        input.rebase(tls.max_ciphertext_record_len) catch |err| switch (err) {
-            error.EndOfStream => {}, // We have assurance the remainder of stream can be buffered.
-            error.ReadFailed => |e| return e,
-        };
-        const record_header = input.peek(tls.record_header_len) catch |err| switch (err) {
+        const record_header = (input.takeArray(tls.record_header_len) catch |err| switch (err) {
             error.EndOfStream => return error.TlsConnectionTruncated,
             error.ReadFailed => |e| return e,
-        };
-        const record_ct = input.takeEnumNonexhaustive(tls.ContentType, .big) catch unreachable; // already peeked
-        input.toss(2); // legacy_version
-        const record_len = input.takeInt(u16, .big) catch unreachable; // already peeked
+        }).*;
+        const record_ct: tls.ContentType = @fromBackingInt(record_header[0]);
+        // record_header[1..3] is legacy_version
+        const record_len = mem.readInt(u16, record_header[3..5], .big);
         if (record_len > tls.max_ciphertext_len) return error.TlsRecordOverflow;
         const record_buffer = input.take(record_len) catch |err| switch (err) {
             error.EndOfStream => return error.TlsConnectionTruncated,
-            error.ReadFailed => return error.ReadFailed,
+            error.ReadFailed => |e| return e,
         };
         var record_decoder: tls.Decoder = .fromTheirSlice(record_buffer);
         var ctd, const ct = content: switch (cipher_state) {
@@ -539,31 +534,29 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                         const auth_tag = record_decoder.array(P.AEAD.tag_length).*;
                         const nonce = nonce: {
                             const V = @Vector(P.AEAD.nonce_length, u8);
-                            const pad = [1]u8{0} ** (P.AEAD.nonce_length - 8);
-                            const operand: V = pad ++ @as([8]u8, @bitCast(big(read_seq)));
+                            const pad: [P.AEAD.nonce_length - 8]u8 = @splat(0);
+                            const operand: V = pad ++ @as([8]u8, @bitCast(@byteSwap(read_seq)));
                             break :nonce @as(V, pv.server_handshake_iv) ^ operand;
                         };
-                        P.AEAD.decrypt(cleartext, ciphertext, auth_tag, record_header, nonce, pv.server_handshake_key) catch
+                        P.AEAD.decrypt(cleartext, ciphertext, auth_tag, &record_header, nonce, pv.server_handshake_key) catch
                             return error.TlsBadRecordMac;
                         // TODO use scalar, non-slice version
+                        const trimmed_len = mem.trimEnd(u8, cleartext, "\x00").len;
                         // ZURL PATCH: the fragment this record adds must
                         // ZURL PATCH: hold at least the inner content
                         // ZURL PATCH: type octet. RFC 8446 section 5.4
                         // ZURL PATCH: refuses a record with no non-zero
-                        // ZURL PATCH: octet in it, and the guard above
-                        // ZURL PATCH: bounds the ciphertext and not the
-                        // ZURL PATCH: plaintext, so a record of the tag
-                        // ZURL PATCH: alone and a record of zero octets
-                        // ZURL PATCH: both reached the subtraction below
-                        // ZURL PATCH: with nothing to subtract from.
-                        const fragment = mem.trimEnd(u8, cleartext, "\x00"); // ZURL PATCH
-                        if (fragment.len == 0) return error.TlsUnexpectedMessage; // ZURL PATCH
-                        cleartext_fragment_end += fragment.len; // ZURL PATCH
+                        // ZURL PATCH: octet in it. Upstream refuses it as
+                        // ZURL PATCH: well, under the name `TlsDecodeError`,
+                        // ZURL PATCH: and the tests of this copy assert the
+                        // ZURL PATCH: name below.
+                        if (trimmed_len == 0) return error.TlsUnexpectedMessage; // ZURL PATCH
+                        cleartext_fragment_end += trimmed_len;
                     },
                 }
                 read_seq += 1;
                 cleartext_fragment_end -= 1;
-                const ct: tls.ContentType = @enumFromInt(cleartext_buf[cleartext_fragment_end]);
+                const ct: tls.ContentType = @fromBackingInt(@intCast(cleartext_buf[cleartext_fragment_end]));
                 if (ct != .handshake) return error.TlsUnexpectedMessage;
                 break :content .{ tls.Decoder.fromTheirSlice(@constCast(cleartext_buf[cleartext_fragment_start..cleartext_fragment_end])), ct };
             },
@@ -589,8 +582,8 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                             comptime std.math.shl(u64, std.math.maxInt(u64), 8 * P.record_iv_length);
                         const nonce: [P.AEAD.nonce_length]u8 = nonce: {
                             const V = @Vector(P.AEAD.nonce_length, u8);
-                            const pad = [1]u8{0} ** (P.AEAD.nonce_length - 8);
-                            const operand: V = pad ++ @as([8]u8, @bitCast(big(masked_read_seq)));
+                            const pad: [P.AEAD.nonce_length - 8]u8 = @splat(0);
+                            const operand: V = pad ++ @as([8]u8, @bitCast(@byteSwap(masked_read_seq)));
                             break :nonce @as(V, pv.app_cipher.server_write_IV ++ record_iv) ^ operand;
                         };
                         const ciphertext = record_decoder.slice(message_len);
@@ -678,7 +671,7 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                             }
                         }
 
-                        tls_version = @enumFromInt(supported_version orelse legacy_version);
+                        tls_version = @fromBackingInt(@intCast(supported_version orelse legacy_version));
                         switch (tls_version) {
                             .tls_1_3 => if (!mem.eql(u8, legacy_session_id_echo, &legacy_session_id)) return error.TlsIllegalParameter,
                             // ZURL PATCH: `options.max_version` is the added guard.
@@ -747,7 +740,7 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                                         const p = &@field(handshake_cipher, @tagName(tag.with()));
                                         const P = @TypeOf(p.*).A;
                                         const hello_hash = p.transcript_hash.peek();
-                                        const zeroes = [1]u8{0} ** P.Hash.digest_length;
+                                        const zeroes: [P.Hash.digest_length]u8 = @splat(0);
                                         const early_secret = P.Hkdf.extract(&[1]u8{0}, &zeroes);
                                         const empty_hash = tls.emptyHash(P.Hash);
                                         p.version = .{ .tls_1_3 = undefined };
@@ -970,14 +963,14 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                             else => return error.TlsIllegalParameter,
                         };
 
-                        const client_key_exchange_prefix = .{@intFromEnum(tls.ContentType.handshake)} ++
-                            int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
+                        const client_key_exchange_prefix = .{@backingInt(tls.ContentType.handshake)} ++
+                            int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
                             int(u16, @intCast(public_key_bytes.len + 5)) ++ // record length
-                            .{@intFromEnum(tls.HandshakeType.client_key_exchange)} ++
+                            .{@backingInt(tls.HandshakeType.client_key_exchange)} ++
                             int(u24, @intCast(public_key_bytes.len + 1)) ++ // handshake message length
                             .{@as(u8, @intCast(public_key_bytes.len))}; // public key length
-                        const client_change_cipher_spec_msg = .{@intFromEnum(tls.ContentType.change_cipher_spec)} ++
-                            int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
+                        const client_change_cipher_spec_msg = .{@backingInt(tls.ContentType.change_cipher_spec)} ++
+                            int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
                             array(u16, tls.ChangeCipherSpecType, .{.change_cipher_spec});
                         const pre_master_secret = key_share.getSharedSecret().?;
                         switch (handshake_cipher) {
@@ -1002,7 +995,7 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                                     &.{ "key expansion", &server_hello_rand, &client_hello_rand },
                                     @sizeOf(P.Tls_1_2),
                                 );
-                                const client_verify_cleartext = .{@intFromEnum(tls.HandshakeType.finished)} ++
+                                const client_verify_cleartext = .{@backingInt(tls.HandshakeType.finished)} ++
                                     array(u24, u8, hmacExpandLabel(
                                         P.Hmac,
                                         &master_secret,
@@ -1022,12 +1015,12 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                                 const pv = &p.version.tls_1_2;
                                 const nonce: [P.AEAD.nonce_length]u8 = nonce: {
                                     const V = @Vector(P.AEAD.nonce_length, u8);
-                                    const pad = [1]u8{0} ** (P.AEAD.nonce_length - 8);
-                                    const operand: V = pad ++ @as([8]u8, @bitCast(big(write_seq)));
+                                    const pad: [P.AEAD.nonce_length - 8]u8 = @splat(0);
+                                    const operand: V = pad ++ @as([8]u8, @bitCast(@byteSwap(write_seq)));
                                     break :nonce @as(V, pv.app_cipher.client_write_IV ++ pv.app_cipher.client_salt) ^ operand;
                                 };
-                                var client_verify_msg = .{@intFromEnum(tls.ContentType.handshake)} ++
-                                    int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
+                                var client_verify_msg = .{@backingInt(tls.ContentType.handshake)} ++
+                                    int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
                                     array(u16, u8, nonce[P.fixed_iv_length..].* ++
                                         @as([client_verify_cleartext.len + P.mac_length]u8, undefined));
                                 P.AEAD.encrypt(
@@ -1063,8 +1056,9 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                         }
                         switch (handshake_cipher) {
                             inline else => |*p| {
+                                const pad: [64]u8 = @splat(' ');
                                 try main_cert_pub_key.verifySignature(&hsd, &.{
-                                    " " ** 64 ++ "TLS 1.3, server CertificateVerify\x00",
+                                    pad ++ "TLS 1.3, server CertificateVerify\x00",
                                     &p.transcript_hash.peek(),
                                     // ZURL PATCH: the version is what keeps
                                     // this call strict about the curve.
@@ -1078,8 +1072,8 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                         if (cipher_state == .cleartext) return error.TlsUnexpectedMessage;
                         if (handshake_state != .finished) return error.TlsUnexpectedMessage;
                         // This message is to trick buggy proxies into behaving correctly.
-                        const client_change_cipher_spec_msg = .{@intFromEnum(tls.ContentType.change_cipher_spec)} ++
-                            int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
+                        const client_change_cipher_spec_msg = .{@backingInt(tls.ContentType.change_cipher_spec)} ++
+                            int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
                             array(u16, tls.ChangeCipherSpecType, .{.change_cipher_spec});
                         const app_cipher = app_cipher: switch (handshake_cipher) {
                             inline else => |*p, tag| switch (tls_version) {
@@ -1093,14 +1087,14 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                                     if (!std.crypto.timing_safe.eql([P.Hmac.mac_length]u8, expected_server_verify_data, hsd.array(P.Hmac.mac_length).*)) return error.TlsDecryptError;
                                     const handshake_hash = p.transcript_hash.finalResult();
                                     const verify_data = tls.hmac(P.Hmac, &handshake_hash, pv.client_finished_key);
-                                    const out_cleartext = .{@intFromEnum(tls.HandshakeType.finished)} ++
+                                    const out_cleartext = .{@backingInt(tls.HandshakeType.finished)} ++
                                         array(u24, u8, verify_data) ++
-                                        .{@intFromEnum(tls.ContentType.handshake)};
+                                        .{@backingInt(tls.ContentType.handshake)};
 
                                     const wrapped_len = out_cleartext.len + P.AEAD.tag_length;
 
-                                    var finished_msg = .{@intFromEnum(tls.ContentType.application_data)} ++
-                                        int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
+                                    var finished_msg = .{@backingInt(tls.ContentType.application_data)} ++
+                                        int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
                                         array(u16, u8, @as([wrapped_len]u8, undefined));
 
                                     const ad = finished_msg[0..tls.record_header_len];
@@ -1297,14 +1291,14 @@ fn prepareCiphertextRecord(
                     };
 
                     @memcpy(cleartext_buf[0..encrypted_content_len], bytes[bytes_i..][0..encrypted_content_len]);
-                    cleartext_buf[encrypted_content_len] = @intFromEnum(inner_content_type);
+                    cleartext_buf[encrypted_content_len] = @backingInt(inner_content_type);
                     bytes_i += encrypted_content_len;
                     const ciphertext_len = encrypted_content_len + 1;
                     const cleartext = cleartext_buf[0..ciphertext_len];
 
                     const ad = ciphertext_buf[ciphertext_end..][0..tls.record_header_len];
-                    ad.* = .{@intFromEnum(tls.ContentType.application_data)} ++
-                        int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
+                    ad.* = .{@backingInt(tls.ContentType.application_data)} ++
+                        int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
                         int(u16, ciphertext_len + P.AEAD.tag_length);
                     ciphertext_end += ad.len;
                     const ciphertext = ciphertext_buf[ciphertext_end..][0..ciphertext_len];
@@ -1313,7 +1307,7 @@ fn prepareCiphertextRecord(
                     ciphertext_end += auth_tag.len;
                     const nonce = nonce: {
                         const V = @Vector(P.AEAD.nonce_length, u8);
-                        const pad = [1]u8{0} ** (P.AEAD.nonce_length - 8);
+                        const pad: [P.AEAD.nonce_length - 8]u8 = @splat(0);
                         const operand: V = pad ++ mem.toBytes(big(c.write_seq));
                         break :nonce @as(V, pv.client_iv) ^ operand;
                     };
@@ -1342,16 +1336,16 @@ fn prepareCiphertextRecord(
 
                     const record_header = ciphertext_buf[ciphertext_end..][0..tls.record_header_len];
                     ciphertext_end += tls.record_header_len;
-                    record_header.* = .{@intFromEnum(inner_content_type)} ++
-                        int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
+                    record_header.* = .{@backingInt(inner_content_type)} ++
+                        int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
                         int(u16, P.record_iv_length + message_len + P.mac_length);
                     const ad = mem.toBytes(big(c.write_seq)) ++ record_header[0 .. 1 + 2] ++ int(u16, message_len);
                     const record_iv = ciphertext_buf[ciphertext_end..][0..P.record_iv_length];
                     ciphertext_end += P.record_iv_length;
                     const nonce: [P.AEAD.nonce_length]u8 = nonce: {
                         const V = @Vector(P.AEAD.nonce_length, u8);
-                        const pad = [1]u8{0} ** (P.AEAD.nonce_length - 8);
-                        const operand: V = pad ++ @as([8]u8, @bitCast(big(c.write_seq)));
+                        const pad: [P.AEAD.nonce_length - 8]u8 = @splat(0);
+                        const operand: V = pad ++ @as([8]u8, @bitCast(@byteSwap(c.write_seq)));
                         break :nonce @as(V, pv.client_write_IV ++ pv.client_salt) ^ operand;
                     };
                     record_iv.* = nonce[P.fixed_iv_length..].*;
@@ -1404,9 +1398,9 @@ fn readIndirect(c: *Client) Reader.Error!usize {
                 return failRead(c, error.TlsConnectionTruncated);
             }
         },
-        error.ReadFailed => return error.ReadFailed,
+        error.ReadFailed => |e| return e,
     };
-    const ct: tls.ContentType = @enumFromInt(record_header[0]);
+    const ct: tls.ContentType = @fromBackingInt(@intCast(record_header[0]));
     const legacy_version = mem.readInt(u16, record_header[1..][0..2], .big);
     _ = legacy_version;
     const record_len = mem.readInt(u16, record_header[3..][0..2], .big);
@@ -1415,7 +1409,7 @@ fn readIndirect(c: *Client) Reader.Error!usize {
     if (record_end > input.buffered().len) {
         input.fillMore() catch |err| switch (err) {
             error.EndOfStream => return failRead(c, error.TlsConnectionTruncated),
-            error.ReadFailed => return error.ReadFailed,
+            error.ReadFailed => |e| return e,
         };
         if (record_end > input.buffered().len) return 0;
     }
@@ -1425,23 +1419,14 @@ fn readIndirect(c: *Client) Reader.Error!usize {
             .tls_1_3 => {
                 const pv = &p.tls_1_3;
                 const P = @TypeOf(p.*);
+                if (record_len < P.AEAD.tag_length) return failRead(c, error.TlsRecordOverflow);
                 const ad = input.take(tls.record_header_len) catch unreachable; // already peeked
-                // ZURL PATCH: the record must be at least as long as the
-                // ZURL PATCH: tag it ends with. The only length check
-                // ZURL PATCH: above bounds `record_len` from above, so
-                // ZURL PATCH: five octets from the server, `17 03 03 00
-                // ZURL PATCH: 00`, made this subtraction wrap to 65520.
-                // ZURL PATCH: The `take` below then failed into a `catch
-                // ZURL PATCH: unreachable`, which is undefined behaviour
-                // ZURL PATCH: in the build a user runs. The handshake
-                // ZURL PATCH: loop in `init` carries the same bound.
-                if (record_len < P.AEAD.tag_length) return failRead(c, error.TlsRecordOverflow); // ZURL PATCH
                 const ciphertext_len = record_len - P.AEAD.tag_length;
                 const ciphertext = input.take(ciphertext_len) catch unreachable; // already peeked
                 const auth_tag = (input.takeArray(P.AEAD.tag_length) catch unreachable).*; // already peeked
                 const nonce = nonce: {
                     const V = @Vector(P.AEAD.nonce_length, u8);
-                    const pad = [1]u8{0} ** (P.AEAD.nonce_length - 8);
+                    const pad: [P.AEAD.nonce_length - 8]u8 = @splat(0);
                     const operand: V = pad ++ mem.toBytes(big(c.read_seq));
                     break :nonce @as(V, pv.server_iv) ^ operand;
                 };
@@ -1454,24 +1439,16 @@ fn readIndirect(c: *Client) Reader.Error!usize {
                 // ZURL PATCH: RFC 8446 section 5.4 makes a plaintext of
                 // ZURL PATCH: all zero octets a record to refuse: it
                 // ZURL PATCH: carries no inner content type at all.
-                // ZURL PATCH: Without this line both reads below use the
-                // ZURL PATCH: largest `usize`, so the content type comes
-                // ZURL PATCH: from the octet before the buffer and the
-                // ZURL PATCH: length of the message is 16 exabytes.
+                // ZURL PATCH: Upstream refuses it as well, under the name
+                // ZURL PATCH: `TlsDecodeError`, and the tests of this copy
+                // ZURL PATCH: assert the name below.
                 if (msg.len == 0) return failRead(c, error.TlsUnexpectedMessage); // ZURL PATCH
-                break :cleartext .{ msg.len - 1, @enumFromInt(msg[msg.len - 1]) };
+                break :cleartext .{ msg.len - 1, @fromBackingInt(@intCast(msg[msg.len - 1])) };
             },
             .tls_1_2 => {
                 const pv = &p.tls_1_2;
                 const P = @TypeOf(p.*);
-                // ZURL PATCH: the record must hold the explicit IV and
-                // ZURL PATCH: the tag before it holds any message. The
-                // ZURL PATCH: same bound as the TLS 1.3 arm above, and
-                // ZURL PATCH: the same one the handshake loop in `init`
-                // ZURL PATCH: already carries. Without it a short record
-                // ZURL PATCH: wraps `message_len` and the `take` below
-                // ZURL PATCH: falls into a `catch unreachable`.
-                if (record_len < P.record_iv_length + P.mac_length) return failRead(c, error.TlsRecordOverflow); // ZURL PATCH
+                if (record_len < P.record_iv_length + P.mac_length) return failRead(c, error.TlsRecordOverflow);
                 const message_len: u16 = record_len - P.record_iv_length - P.mac_length;
                 const ad_header = input.take(tls.record_header_len) catch unreachable; // already peeked
                 const ad = mem.toBytes(big(c.read_seq)) ++
@@ -1482,8 +1459,8 @@ fn readIndirect(c: *Client) Reader.Error!usize {
                     comptime std.math.shl(u64, std.math.maxInt(u64), 8 * P.record_iv_length);
                 const nonce: [P.AEAD.nonce_length]u8 = nonce: {
                     const V = @Vector(P.AEAD.nonce_length, u8);
-                    const pad = [1]u8{0} ** (P.AEAD.nonce_length - 8);
-                    const operand: V = pad ++ @as([8]u8, @bitCast(big(masked_read_seq)));
+                    const pad: [P.AEAD.nonce_length - 8]u8 = @splat(0);
+                    const operand: V = pad ++ @as([8]u8, @bitCast(@byteSwap(masked_read_seq)));
                     break :nonce @as(V, pv.server_write_IV ++ record_iv) ^ operand;
                 };
                 const ciphertext = input.take(message_len) catch unreachable; // already peeked
@@ -1503,8 +1480,8 @@ fn readIndirect(c: *Client) Reader.Error!usize {
         .alert => {
             if (cleartext.len != 2) return failRead(c, error.TlsDecodeError);
             const alert: tls.Alert = .{
-                .level = @enumFromInt(cleartext[0]),
-                .description = @enumFromInt(cleartext[1]),
+                .level = @fromBackingInt(@intCast(cleartext[0])),
+                .description = @fromBackingInt(@intCast(cleartext[1])),
             };
             switch (alert.description) {
                 .close_notify => {
@@ -1532,7 +1509,7 @@ fn readIndirect(c: *Client) Reader.Error!usize {
                 // ZURL PATCH: into the record before it, which the peer
                 // ZURL PATCH: also wrote. The bound goes in front.
                 if (cleartext.len - ct_i < 4) return failRead(c, error.TlsBadLength); // ZURL PATCH
-                const handshake_type: tls.HandshakeType = @enumFromInt(cleartext[ct_i]);
+                const handshake_type: tls.HandshakeType = @fromBackingInt(@intCast(cleartext[ct_i]));
                 ct_i += 1;
                 const handshake_len = mem.readInt(u24, cleartext[ct_i..][0..3], .big);
                 ct_i += 3;
@@ -1555,12 +1532,7 @@ fn readIndirect(c: *Client) Reader.Error!usize {
                         // ZURL PATCH: of an untagged union, in any build
                         // ZURL PATCH: mode, so the version is checked here.
                         if (c.tls_version != .tls_1_3) return failRead(c, error.TlsUnexpectedMessage); // ZURL PATCH
-                        // ZURL PATCH: the body is one octet, the
-                        // ZURL PATCH: `request_update`. Upstream reads
-                        // ZURL PATCH: `handshake[0]` below, and a
-                        // ZURL PATCH: `handshake_len` of zero passes the
-                        // ZURL PATCH: bound above and leaves it empty.
-                        if (handshake.len != 1) return failRead(c, error.TlsDecodeError); // ZURL PATCH
+                        if (handshake.len != 1) return failRead(c, error.TlsDecodeError);
                         switch (c.application_cipher) {
                             inline else => |*p| {
                                 const pv = &p.tls_1_3;
@@ -1579,7 +1551,7 @@ fn readIndirect(c: *Client) Reader.Error!usize {
                         }
                         c.read_seq = 0;
 
-                        switch (@as(tls.KeyUpdateRequest, @enumFromInt(handshake[0]))) {
+                        switch (@as(tls.KeyUpdateRequest, @fromBackingInt(@intCast(handshake[0])))) {
                             .update_requested => {
                                 // ZURL PATCH: this arm is the one place the
                                 // ZURL PATCH: read path writes the state the
@@ -1642,11 +1614,11 @@ fn failRead(c: *Client, err: ReadError) error{ReadFailed} {
 }
 
 fn logSecrets(w: *Writer, context: anytype, secrets: anytype) void {
-    inline for (@typeInfo(@TypeOf(secrets)).@"struct".fields) |field| w.print("{s}" ++
-        (if (@hasField(@TypeOf(context), "counter")) "_{d}" else "") ++ " {x} {x}\n", .{field.name} ++
+    inline for (@typeInfo(@TypeOf(secrets)).@"struct".field_names) |field_name| w.print("{s}" ++
+        (if (@hasField(@TypeOf(context), "counter")) "_{d}" else "") ++ " {x} {x}\n", .{field_name} ++
         (if (@hasField(@TypeOf(context), "counter")) .{context.counter} else .{}) ++ .{
         context.client_random,
-        @field(secrets, field.name),
+        @field(secrets, field_name),
     }) catch {};
 }
 
@@ -1677,7 +1649,7 @@ const KeyShare = struct {
             .ml_kem768_kp = try .generateDeterministic(seed[0..64].*),
             .secp256r1_kp = try .generateDeterministic(seed[64..96].*),
             .secp384r1_kp = try .generateDeterministic(seed[96..144].*),
-            .x25519_kp = try .generateDeterministic(seed[144..176].*),
+            .x25519_kp = .generateDeterministic(seed[144..176].*),
             .sk_buf = undefined,
             .sk_len = 0,
         };
@@ -1933,7 +1905,7 @@ const CertificatePublicKey = struct {
                     inline 256, 384, 512 => |modulus_len| { // ZURL PATCH
                         const key: PublicKey = try .fromBytes(exponent, modulus);
                         const sig = RsaSignature.fromBytes(modulus_len, encoded_sig);
-                        try RsaSignature.concatVerify(modulus_len, sig, msg, key, Hash);
+                        try RsaSignature.concatVerify(modulus_len, &sig, msg, key, Hash);
                     },
                     else => return error.TlsBadRsaSignatureBitCount,
                 }
@@ -2037,6 +2009,116 @@ else
         .ECDHE_ECDSA_WITH_AES_256_GCM_SHA384, // ZURL PATCH
         .ECDHE_RSA_WITH_AES_256_GCM_SHA384,
     });
+
+fn testReadError(input_buf: []const u8, tls_version: tls.ProtocolVersion, cipher: tls.ApplicationCipher) ReadError {
+    var input_reader: Reader = .fixed(input_buf);
+    var read_buf: [tls.max_ciphertext_record_len]u8 = undefined;
+    var c: Client = .{
+        .input = &input_reader,
+        .reader = .{
+            .buffer = &read_buf,
+            .vtable = &.{ .stream = stream, .readVec = readVec },
+            .seek = 0,
+            .end = 0,
+        },
+        .output = undefined,
+        .writer = undefined,
+        .tls_version = tls_version,
+        .read_seq = 0,
+        .write_seq = 0,
+        .received_close_notify = false,
+        .allow_truncation_attacks = false,
+        .application_cipher = cipher,
+        .ssl_key_log = null,
+    };
+    var w: Writer = .failing;
+    std.testing.expectError(error.ReadFailed, c.reader.stream(&w, .unlimited)) catch
+        @panic("expected ReadFailed");
+    return c.read_err.?;
+}
+
+test "empty inner plaintext" {
+    const AEAD = crypto.aead.chacha_poly.ChaCha20Poly1305;
+    const key: [AEAD.key_length]u8 = @splat(0);
+    const iv: [AEAD.nonce_length]u8 = @splat(0);
+
+    const plaintext = [1]u8{0x00};
+    var ciphertext: [plaintext.len]u8 = undefined;
+    var tag: [AEAD.tag_length]u8 = undefined;
+    const content_len: u16 = plaintext.len + AEAD.tag_length;
+    const record_header = [_]u8{ 0x17, 0x03, 0x03 } ++ mem.toBytes(big(content_len));
+    AEAD.encrypt(&ciphertext, &tag, &plaintext, &record_header, iv, key);
+
+    // ZURL PATCH: upstream names this refusal `TlsDecodeError`. This copy
+    // ZURL PATCH: names it `TlsUnexpectedMessage`, and `test_server.zig`
+    // ZURL PATCH: asserts that name over a real handshake as well.
+    try std.testing.expectEqual(error.TlsUnexpectedMessage, testReadError( // ZURL PATCH
+        &record_header ++ ciphertext ++ tag,
+        .tls_1_3,
+        .{ .CHACHA20_POLY1305_SHA256 = .{ .tls_1_3 = .{
+            .server_key = key,
+            .server_iv = iv,
+            .client_secret = undefined,
+            .server_secret = undefined,
+            .client_key = undefined,
+            .client_iv = undefined,
+        } } },
+    ));
+}
+
+test "record shorter than tag" {
+    const AEAD = crypto.aead.chacha_poly.ChaCha20Poly1305;
+    const record_len: u16 = AEAD.tag_length - 1;
+    const header = [_]u8{ 0x17, 0x03, 0x03 } ++ mem.toBytes(big(record_len));
+    const wire = header ++ @as([record_len]u8, @splat(0));
+
+    try std.testing.expectEqual(error.TlsRecordOverflow, testReadError(
+        &wire,
+        .tls_1_3,
+        .{ .CHACHA20_POLY1305_SHA256 = .{ .tls_1_3 = .{
+            .server_key = undefined,
+            .server_iv = undefined,
+            .client_secret = undefined,
+            .server_secret = undefined,
+            .client_key = undefined,
+            .client_iv = undefined,
+        } } },
+    ));
+}
+
+test "TLS 1.2 record shorter than IV plus tag" {
+    const P = tls.ApplicationCipherT(crypto.aead.aes_gcm.Aes128Gcm, crypto.hash.sha2.Sha256, 8);
+    const record_len: u16 = P.record_iv_length + P.mac_length - 1;
+    const header = [_]u8{ 0x17, 0x03, 0x03 } ++ mem.toBytes(big(record_len));
+
+    try std.testing.expectEqual(error.TlsRecordOverflow, testReadError(
+        &(header ++ @as([record_len]u8, @splat(0))),
+        .tls_1_2,
+        .{ .AES_128_GCM_SHA256 = .{ .tls_1_2 = mem.zeroes(P.Tls_1_2) } },
+    ));
+}
+
+test "zero-length key_update body" {
+    const Chacha = crypto.aead.chacha_poly.ChaCha20Poly1305;
+    const plaintext = [_]u8{ 0x18, 0x00, 0x00, 0x00, 0x16 };
+    const header = [_]u8{ 0x17, 0x03, 0x03 } ++ mem.toBytes(big(@as(u16, plaintext.len + Chacha.tag_length)));
+    var ct: [plaintext.len]u8 = undefined;
+    var tag: [Chacha.tag_length]u8 = undefined;
+    Chacha.encrypt(&ct, &tag, &plaintext, &header, @splat(0), @splat(0));
+    const wire = header ++ ct ++ tag;
+    try std.testing.expectEqual(error.TlsDecodeError, testReadError(
+        &wire,
+        .tls_1_3,
+        .{ .CHACHA20_POLY1305_SHA256 = .{ .tls_1_3 = .{
+            .server_key = @splat(0),
+            .server_iv = @splat(0),
+            .client_secret = undefined,
+            .server_secret = undefined,
+            .client_key = undefined,
+            .client_iv = undefined,
+        } } },
+    ));
+}
 
 // ZURL PATCH: everything below this line is not upstream. See the file
 // `UPSTREAM` beside this one for what the patch is and how to re-sync it.
@@ -2161,7 +2243,7 @@ fn encodeAlpn(
     }
 
     const list_len: u16 = @intCast(at - header_len);
-    mem.writeInt(u16, out[0..2], @intFromEnum(tls.ExtensionType.application_layer_protocol_negotiation), .big);
+    mem.writeInt(u16, out[0..2], @backingInt(tls.ExtensionType.application_layer_protocol_negotiation), .big);
     // The extension holds the list and the two bytes that count it.
     mem.writeInt(u16, out[2..4], list_len + 2, .big);
     mem.writeInt(u16, out[4..6], list_len, .big);
@@ -2349,7 +2431,7 @@ fn walkSubjectAltNames(
         const general_name = try parseName(subject_alt_name, name_i);
         name_i = general_name.slice.end;
 
-        const tag: Certificate.GeneralNameTag = @enumFromInt(@intFromEnum(general_name.identifier.tag));
+        const tag: Certificate.GeneralNameTag = @fromBackingInt(@intCast(@backingInt(general_name.identifier.tag)));
         const name = subject_alt_name[general_name.slice.start..general_name.slice.end];
         switch (want) {
             .dns => |host| {
@@ -2821,7 +2903,7 @@ fn checkNameConstraints(
         if (field.identifier.class != .context_specific) {
             return error.CertificateFieldHasWrongDataType;
         }
-        switch (@intFromEnum(field.identifier.tag)) {
+        switch (@backingInt(field.identifier.tag)) {
             0 => permitted = field,
             1 => excluded = field,
             // A field of this extension that RFC 5280 does not give.
@@ -2878,7 +2960,7 @@ fn walkSubtrees(
         if (base.slice.end != subtree.slice.end) return error.CertificateNameNotPermitted;
         if (base.identifier.class != .context_specific) return error.CertificateNameNotPermitted;
 
-        const tag: Certificate.GeneralNameTag = @enumFromInt(@intFromEnum(base.identifier.tag));
+        const tag: Certificate.GeneralNameTag = @fromBackingInt(@intCast(@backingInt(base.identifier.tag)));
         const name = bytes[base.slice.start..base.slice.end];
         switch (tag) {
             .dNSName => switch (want) {
@@ -3217,7 +3299,7 @@ pub const quic = struct {
         }
 
         fn writeShareBytes(w: *Writer, group: tls.NamedGroup, key: []const u8) Writer.Error!void {
-            try w.writeInt(u16, @intFromEnum(group), .big);
+            try w.writeInt(u16, @backingInt(group), .big);
             try w.writeInt(u16, @intCast(key.len), .big);
             try w.writeAll(key);
         }
@@ -3512,7 +3594,7 @@ fn signAndVerifyEcdsa(
     msg: []const u8,
 ) !void {
     const Ecdsa = CertificateEcdsa(curve, scheme);
-    const seed = [_]u8{0x2a} ** Ecdsa.KeyPair.seed_length;
+    const seed: [Ecdsa.KeyPair.seed_length]u8 = @splat(0x2a);
     const pair = try Ecdsa.KeyPair.generateDeterministic(seed);
 
     const signature = try pair.sign(msg, null);
@@ -3557,7 +3639,7 @@ test "a signature over other bytes fails whatever the curve is" {
     // The leniency widens which key the client parses and not which signature
     // it accepts.
     const Ecdsa = CertificateEcdsa(.X9_62_prime256v1, .ecdsa_secp384r1_sha384);
-    const seed = [_]u8{0x2a} ** Ecdsa.KeyPair.seed_length;
+    const seed: [Ecdsa.KeyPair.seed_length]u8 = @splat(0x2a);
     const pair = try Ecdsa.KeyPair.generateDeterministic(seed);
 
     const signature = try pair.sign("the message that was signed", null);
@@ -3602,7 +3684,7 @@ fn offeredCipherSuites() [(cipher_suites.len - 2) / 2]tls.CipherSuite {
     var suites: [(cipher_suites.len - 2) / 2]tls.CipherSuite = undefined;
     for (&suites, 0..) |*suite, index| {
         const offset = 2 + index * 2;
-        suite.* = @enumFromInt(mem.readInt(u16, cipher_suites[offset..][0..2], .big));
+        suite.* = @fromBackingInt(@intCast(mem.readInt(u16, cipher_suites[offset..][0..2], .big)));
     }
     return suites;
 }
@@ -3683,18 +3765,18 @@ test "the Client Hello sends the byte count of the suites that follow it" {
 /// the version from the legacy field. The random bytes are zero, which is not
 /// the "DOWNGRD" sentinel that `init` refuses.
 fn serverHello12(suite: tls.CipherSuite, out: []u8) []u8 {
-    const body = int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
-        [1]u8{0} ** 32 ++ // random
+    const body = int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
+        @as([32]u8, @splat(0)) ++ // random
         [1]u8{0} ++ // legacy_session_id_echo, empty
-        int(u16, @intFromEnum(suite)) ++
+        int(u16, @backingInt(suite)) ++
         [1]u8{0}; // legacy_compression_method
 
-    const handshake = [1]u8{@intFromEnum(tls.HandshakeType.server_hello)} ++
+    const handshake = [1]u8{@backingInt(tls.HandshakeType.server_hello)} ++
         int(u24, body.len) ++
         body;
 
-    const record = [1]u8{@intFromEnum(tls.ContentType.handshake)} ++
-        int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
+    const record = [1]u8{@backingInt(tls.ContentType.handshake)} ++
+        int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
         int(u16, handshake.len) ++
         handshake;
 
@@ -3780,18 +3862,18 @@ test "a TLS 1.2 Server Hello that names a suite this client does not offer stops
 /// TLS 1.2 has to set these last eight bytes. RFC 8446 section 4.1.3 asks a
 /// client that **offered** TLS 1.3 to abort on them.
 fn serverHello12Downgrade(suite: tls.CipherSuite, out: []u8) []u8 {
-    const body = int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
-        [1]u8{0} ** 24 ++ "DOWNGRD".* ++ [1]u8{0x01} ++ // random
+    const body = int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
+        @as([24]u8, @splat(0)) ++ "DOWNGRD".* ++ [1]u8{0x01} ++ // random
         [1]u8{0} ++ // legacy_session_id_echo, empty
-        int(u16, @intFromEnum(suite)) ++
+        int(u16, @backingInt(suite)) ++
         [1]u8{0}; // legacy_compression_method
 
-    const handshake = [1]u8{@intFromEnum(tls.HandshakeType.server_hello)} ++
+    const handshake = [1]u8{@backingInt(tls.HandshakeType.server_hello)} ++
         int(u24, body.len) ++
         body;
 
-    const record = [1]u8{@intFromEnum(tls.ContentType.handshake)} ++
-        int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
+    const record = [1]u8{@backingInt(tls.ContentType.handshake)} ++
+        int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
         int(u16, handshake.len) ++
         handshake;
 
@@ -3951,7 +4033,7 @@ fn buildSan(out: []u8, names: []const GeneralName) []const u8 {
     for (names) |name| {
         std.debug.assert(name.bytes.len < 128);
         std.debug.assert(at + 2 + name.bytes.len <= out.len);
-        out[at] = 0x80 | @as(u8, @intFromEnum(name.tag));
+        out[at] = 0x80 | @as(u8, @backingInt(name.tag));
         out[at + 1] = @intCast(name.bytes.len);
         @memcpy(out[at + 2 ..][0..name.bytes.len], name.bytes);
         at += 2 + name.bytes.len;
@@ -4245,12 +4327,12 @@ test "an ALPN list that has no wire form is refused before the hello goes out" {
 
     // And a list of names that together pass the bound of the buffer.
     const name: [alpn_max_protocol_len]u8 = @splat('x');
-    const many = [_][]const u8{&name} ** 4;
+    const many: [4][]const u8 = @splat(&name);
     try testing.expectError(error.TlsAlpnOfferInvalid, alpnBytes(&many, &buf));
 
     // One under that bound still fits, so the refusal is the length and
     // never the count.
-    const fits = [_][]const u8{&name} ** 2;
+    const fits: [2][]const u8 = @splat(&name);
     const built = try alpnBytes(&fits, &buf);
     try testing.expectEqual(@as(usize, 6 + 2 * (1 + alpn_max_protocol_len)), built.len);
 }
@@ -4264,12 +4346,12 @@ test "an ALPN list that has no wire form is refused before the hello goes out" {
 /// extension reports here.
 fn checkHelloLengths(hello: []const u8) !void {
     try testing.expect(hello.len > tls.record_header_len);
-    try testing.expectEqual(@intFromEnum(tls.ContentType.handshake), hello[0]);
+    try testing.expectEqual(@backingInt(tls.ContentType.handshake), hello[0]);
     const record_len = mem.readInt(u16, hello[3..5], .big);
     try testing.expectEqual(hello.len - tls.record_header_len, record_len);
 
     const handshake = hello[tls.record_header_len..];
-    try testing.expectEqual(@intFromEnum(tls.HandshakeType.client_hello), handshake[0]);
+    try testing.expectEqual(@backingInt(tls.HandshakeType.client_hello), handshake[0]);
     const handshake_len = mem.readInt(u24, handshake[1..4], .big);
     try testing.expectEqual(handshake.len - 4, handshake_len);
 
@@ -4324,7 +4406,7 @@ fn alpnExtensionOf(hello: []const u8) ?[]const u8 {
     while (at < block.len) {
         const et = mem.readInt(u16, block[at..][0..2], .big);
         const ext_len = mem.readInt(u16, block[at + 2 ..][0..2], .big);
-        if (et == @intFromEnum(tls.ExtensionType.application_layer_protocol_negotiation)) {
+        if (et == @backingInt(tls.ExtensionType.application_layer_protocol_negotiation)) {
             return block[at..][0 .. 4 + ext_len];
         }
         at += 4 + ext_len;
@@ -4469,10 +4551,10 @@ fn serverHello12Alpn(selected: []const u8, out: []u8) ![]u8 {
     var ext_buf: [alpn_extension_max]u8 = undefined;
     const ext = try encodeAlpn(&.{selected}, &ext_buf);
 
-    const fixed = int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)) ++
-        [1]u8{0} ** 32 ++ // random
+    const fixed = int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
+        @as([32]u8, @splat(0)) ++ // random
         [1]u8{0} ++ // legacy_session_id_echo, empty
-        int(u16, @intFromEnum(tls.CipherSuite.ECDHE_RSA_WITH_AES_128_GCM_SHA256)) ++
+        int(u16, @backingInt(tls.CipherSuite.ECDHE_RSA_WITH_AES_128_GCM_SHA256)) ++
         [1]u8{0}; // legacy_compression_method
 
     const body_len = fixed.len + 2 + ext.len;
@@ -4481,13 +4563,13 @@ fn serverHello12Alpn(selected: []const u8, out: []u8) ![]u8 {
     try testing.expect(out.len >= record_len);
 
     var at: usize = 0;
-    out[at] = @intFromEnum(tls.ContentType.handshake);
+    out[at] = @backingInt(tls.ContentType.handshake);
     at += 1;
-    @memcpy(out[at..][0..2], &int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2)));
+    @memcpy(out[at..][0..2], &int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)));
     at += 2;
     @memcpy(out[at..][0..2], &int(u16, @intCast(handshake_len)));
     at += 2;
-    out[at] = @intFromEnum(tls.HandshakeType.server_hello);
+    out[at] = @backingInt(tls.HandshakeType.server_hello);
     at += 1;
     @memcpy(out[at..][0..3], &int(u24, @intCast(body_len)));
     at += 3;
@@ -4737,12 +4819,13 @@ pub const MintNameConstraints = struct {
 
 /// The default `notBefore` of a minted certificate, in UTCTime.
 ///
-/// RFC 5280 section 4.1.2.5.1 reads a two digit year below 50 as 20YY, so
-/// this is 2020 and the default `mint_not_after` is 2099.
+/// RFC 5280 section 4.1.2.5.1 reads a two digit year below 50 as 20YY and a
+/// year of 50 or above as 19YY, so this is 2020.
 pub const mint_not_before = "200101000000Z";
 
-/// The default `notAfter` of a minted certificate, in UTCTime.
-pub const mint_not_after = "991231235959Z";
+/// The default `notAfter` of a minted certificate, in UTCTime. This is 2049,
+/// the last year a two digit UTCTime year can name in this century.
+pub const mint_not_after = "491231235959Z";
 
 pub const MintOptions = struct {
     serial: u8,
@@ -5301,7 +5384,7 @@ test "an address name constraint holds the addresses its mask covers" {
     try testing.expect(!addressInSubtree(&[_]u8{ 192, 0, 2, 0 }, &[_]u8{ 192, 0, 2, 7 }));
     // An IPv4 address is not inside an IPv6 subtree, whatever the mask
     // says, because the two are not the same kind of name.
-    try testing.expect(!addressInSubtree(&[_]u8{0} ** 32, &[_]u8{ 192, 0, 2, 7 }));
+    try testing.expect(!addressInSubtree(&@as([32]u8, @splat(0)), &[_]u8{ 192, 0, 2, 7 }));
 }
 
 test "a constrained certificate authority answers for its name space alone" {
@@ -5748,7 +5831,7 @@ fn signatureSchemesOf(hello: []const u8) ?[]const u8 {
     while (at < block.len) {
         const et = mem.readInt(u16, block[at..][0..2], .big);
         const ext_len = mem.readInt(u16, block[at + 2 ..][0..2], .big);
-        if (et == @intFromEnum(tls.ExtensionType.signature_algorithms)) {
+        if (et == @backingInt(tls.ExtensionType.signature_algorithms)) {
             // The payload opens with its own two octet count, and the
             // schemes follow it.
             return block[at + 6 ..][0 .. ext_len - 2];
@@ -5799,8 +5882,8 @@ test "the Client Hello offers a SHA-1 scheme that this build will not accept" {
     var at: usize = 0;
     while (at < schemes.len) : (at += 2) {
         const scheme = mem.readInt(u16, schemes[at..][0..2], .big);
-        if (scheme == @intFromEnum(tls.SignatureScheme.rsa_pkcs1_sha1)) saw_rsa_pkcs1_sha1 = true;
-        try testing.expect(scheme != @intFromEnum(tls.SignatureScheme.ecdsa_sha1));
+        if (scheme == @backingInt(tls.SignatureScheme.rsa_pkcs1_sha1)) saw_rsa_pkcs1_sha1 = true;
+        try testing.expect(scheme != @backingInt(tls.SignatureScheme.ecdsa_sha1));
     }
 
     // Pinned as a fact, so that a later build which does take it out of
@@ -5828,7 +5911,7 @@ test "a server that signs with SHA-1 is refused whatever the hello offered" {
 
     // `04 01` is the length of the signature that follows, and the
     // signature itself is never read: the scheme is refused first.
-    const wire = [_]u8{ 0x02, 0x01, 0x00, 0x04 } ++ [_]u8{0} ** 4;
+    const wire = [_]u8{ 0x02, 0x01, 0x00, 0x04 } ++ @as([4]u8, @splat(0));
     var sigd = tls.Decoder.fromTheirSlice(@constCast(&wire));
     try testing.expectError(
         error.TlsBadSignatureScheme,
@@ -5953,7 +6036,7 @@ test "a 1024 bit modulus cannot check a TLS signature either" {
 
     // `rsa_pkcs1_sha256`, then a 128 octet signature of no meaning. The
     // width of the modulus is read before the signature is.
-    const wire = [_]u8{ 0x04, 0x01, 0x00, 0x80 } ++ [_]u8{0} ** 128;
+    const wire = [_]u8{ 0x04, 0x01, 0x00, 0x80 } ++ @as([128]u8, @splat(0));
     var sigd = tls.Decoder.fromTheirSlice(@constCast(&wire));
     try testing.expectError(
         error.TlsBadRsaSignatureBitCount,

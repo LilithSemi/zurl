@@ -548,10 +548,10 @@ test "a packet shorter than a tag is refused rather than subtracted" {
     const keys: Keys = .fromSecret(.aes_128_gcm, &secret);
     var plain: [64]u8 = undefined;
     try testing.expectError(error.PacketTooShort, keys.open(&plain, &.{}, &.{}, 0));
-    try testing.expectError(error.PacketTooShort, keys.open(&plain, &([_]u8{0} ** 15), &.{}, 0));
+    try testing.expectError(error.PacketTooShort, keys.open(&plain, &@as([15]u8, @splat(0)), &.{}, 0));
     // And an output with no room says so rather than writing past it.
     var small: [1]u8 = undefined;
-    try testing.expectError(error.NoRoom, keys.open(&small, &([_]u8{0} ** 20), &.{}, 0));
+    try testing.expectError(error.NoRoom, keys.open(&small, &@as([20]u8, @splat(0)), &.{}, 0));
 }
 
 test "each suite names its hash and the width of its two keys" {

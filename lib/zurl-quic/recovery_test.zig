@@ -454,7 +454,7 @@ test "an ACK naming more ranges than the bound is used and the rest are counted"
     // Every pair is a zero Gap and a zero ACK Range Length, so each range
     // covers one packet number and steps down by two.
     const pairs = Recovery.max_ack_ranges + 44;
-    const ranges = [_]u8{0} ** (pairs * 2);
+    const ranges: [pairs * 2]u8 = @splat(0);
     const many: frame.Ack = .{
         .largest_acknowledged = 1_000_000,
         .ack_delay = 0,
@@ -813,7 +813,7 @@ test "an ACK range past the bound names an older packet and does not acknowledge
     try send(&recovery, .application, 1000, 0);
 
     const pairs = 300;
-    const ranges = [_]u8{0} ** (pairs * 2);
+    const ranges: [pairs * 2]u8 = @splat(0);
     const many: frame.Ack = .{
         .largest_acknowledged = 1000,
         .ack_delay = 0,

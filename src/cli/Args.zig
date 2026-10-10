@@ -2950,7 +2950,7 @@ fn applyEffect(
             // flag that closed the range. This is the `--tls-max` side of
             // that check; `namedFloor` is the other side.
             if (b.tls_named_min) |floor| {
-                if (@intFromEnum(named) < @intFromEnum(floor)) return fail(
+                if (@backingInt(named) < @backingInt(floor)) return fail(
                     b.arena,
                     fault,
                     error.TlsVersionRangeEmpty,
@@ -4126,7 +4126,7 @@ fn namedFloor(
     fault: ?*Fault,
 ) (ParseError || Allocator.Error)!void {
     if (b.tls_named_max) |ceiling| {
-        if (@intFromEnum(named) > @intFromEnum(ceiling)) return fail(
+        if (@backingInt(named) > @backingInt(ceiling)) return fail(
             b.arena,
             fault,
             error.TlsVersionRangeEmpty,
@@ -4137,7 +4137,7 @@ fn namedFloor(
     // The highest named wins, the way the floor itself does, so a lower
     // flag after a higher one cannot walk the pair back into agreement.
     b.tls_named_min = if (b.tls_named_min) |current|
-        if (@intFromEnum(named) >= @intFromEnum(current)) named else current
+        if (@backingInt(named) >= @backingInt(current)) named else current
     else
         named;
 }
@@ -7082,8 +7082,8 @@ test "a config file's quoted value must fit the decode buffer" {
     var warnings: std.ArrayList([]const u8) = .empty;
     var fault: Fault = .{};
 
-    const huge = "x" ** (max_config_value_bytes + 1);
-    const text = try std.fmt.allocPrint(arena.allocator(), "header \"{s}\"\n", .{huge});
+    const huge: [max_config_value_bytes + 1]u8 = @splat('x');
+    const text = try std.fmt.allocPrint(arena.allocator(), "header \"{s}\"\n", .{&huge});
 
     const result = testExpand(arena.allocator(), &env, text, .named, &warnings, &fault);
     try testing.expectError(error.ConfigFileMalformed, result);
@@ -7091,7 +7091,7 @@ test "a config file's quoted value must fit the decode buffer" {
     // the decode buffer. The same value with no quotes parses.
     try testing.expect(std.mem.indexOf(u8, fault.message, "quoted") != null);
 
-    const unquoted = try std.fmt.allocPrint(arena.allocator(), "header {s}\n", .{huge});
+    const unquoted = try std.fmt.allocPrint(arena.allocator(), "header {s}\n", .{&huge});
     const tokens = try testExpand(arena.allocator(), &env, unquoted, .named, &warnings, null);
     try testing.expectEqual(@as(usize, 2), tokens.len);
 }
@@ -7103,8 +7103,8 @@ test "a quoted value at the decode bound is accepted" {
     defer env.deinit();
     var warnings: std.ArrayList([]const u8) = .empty;
 
-    const at_bound = "x" ** max_config_value_bytes;
-    const text = try std.fmt.allocPrint(arena.allocator(), "header \"{s}\"\n", .{at_bound});
+    const at_bound: [max_config_value_bytes]u8 = @splat('x');
+    const text = try std.fmt.allocPrint(arena.allocator(), "header \"{s}\"\n", .{&at_bound});
 
     const tokens = try testExpand(arena.allocator(), &env, text, .named, &warnings, null);
     try testing.expectEqual(@as(usize, 2), tokens.len);
@@ -7241,7 +7241,8 @@ test "an unbounded option name cannot put a config file's bytes on standard erro
     var warnings: std.ArrayList([]const u8) = .empty;
     var fault: Fault = .{};
 
-    const text = try std.fmt.allocPrint(arena.allocator(), "-{s}\n", .{"Q" ** 200_000});
+    const name: [200_000]u8 = @splat('Q');
+    const text = try std.fmt.allocPrint(arena.allocator(), "-{s}\n", .{&name});
     const result = testExpand(arena.allocator(), &env, text, .named, &warnings, &fault);
 
     try testing.expectError(error.ConfigFileMalformed, result);
@@ -8529,7 +8530,10 @@ test "a --proto list past a bound is refused, and the message shows no raw bytes
     var env = testEnv();
     defer env.deinit();
 
-    const long = "http," ** ((zurl_core.redirect.Set.max_list_bytes / 5) + 1);
+    const entry = "http,";
+    const long = std.mem.sliceAsBytes(
+        &@as([(zurl_core.redirect.Set.max_list_bytes / 5) + 1][entry.len]u8, @splat(entry.*)),
+    );
     var fault: Fault = undefined;
     try testing.expectError(
         error.InvalidProtocolList,
@@ -8537,11 +8541,11 @@ test "a --proto list past a bound is refused, and the message shows no raw bytes
     );
     try testing.expect(std.mem.indexOf(u8, fault.message, "longer than") != null);
 
-    const many = "," ** (zurl_core.redirect.Set.max_entries + 1);
+    const many: [zurl_core.redirect.Set.max_entries + 1]u8 = @splat(',');
     var many_fault: Fault = undefined;
     try testing.expectError(
         error.InvalidProtocolList,
-        parse(arena.allocator(), &.{ "--proto", many, "http://x" }, &env, &many_fault),
+        parse(arena.allocator(), &.{ "--proto", &many, "http://x" }, &env, &many_fault),
     );
     try testing.expect(std.mem.indexOf(u8, many_fault.message, "names more than") != null);
 }

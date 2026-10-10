@@ -691,7 +691,9 @@ test "a bar at a known total shows a percentage" {
     // curl 8.21.0, measured: `\r` then the bar left aligned in
     // `columns - 7`, a space, and the percentage in five columns.
     try testing.expectEqual(@as(usize, 1 + default_columns), got.len);
-    try testing.expectEqualStrings("\r" ++ "#" ** 36 ++ " " ** 36 ++ "  50.0%", got);
+    const hashes: [36]u8 = @splat('#');
+    const spaces: [36]u8 = @splat(' ');
+    try testing.expectEqualStrings("\r" ++ hashes ++ spaces ++ "  50.0%", got);
 }
 
 test "a zero total shows an indeterminate meter, not a division by zero" {

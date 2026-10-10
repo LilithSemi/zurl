@@ -223,7 +223,7 @@ fn run(s: *Server, script: Script) void {
 
         var out: [64]u8 = undefined;
         var w: Io.Writer = .fixed(&out);
-        w.writeInt(u16, @intFromEnum(packet.Opcode.oack), .big) catch return;
+        w.writeInt(u16, @backingInt(packet.Opcode.oack), .big) catch return;
         w.print("blksize\x00{d}\x00tsize\x00{d}\x00", .{
             packet.default_block_size,
             "INTRUDER".len,
@@ -231,7 +231,7 @@ fn run(s: *Server, script: Script) void {
         socket.send(testing.io, &client, w.buffered()) catch return;
 
         var block_out: [16]u8 = undefined;
-        std.mem.writeInt(u16, block_out[0..2], @intFromEnum(packet.Opcode.data), .big);
+        std.mem.writeInt(u16, block_out[0..2], @backingInt(packet.Opcode.data), .big);
         std.mem.writeInt(u16, block_out[2..4], 1, .big);
         @memcpy(block_out[4..12], "INTRUDER");
         socket.send(testing.io, &client, block_out[0..12]) catch return;
@@ -249,7 +249,7 @@ fn run(s: *Server, script: Script) void {
     if (script.refuse) |refusal| {
         var out: [256]u8 = undefined;
         var w: Io.Writer = .fixed(&out);
-        w.writeInt(u16, @intFromEnum(packet.Opcode.err), .big) catch return;
+        w.writeInt(u16, @backingInt(packet.Opcode.err), .big) catch return;
         w.writeInt(u16, refusal.code, .big) catch return;
         w.writeAll(refusal.message) catch return;
         w.writeByte(0) catch return;
@@ -268,7 +268,7 @@ fn run(s: *Server, script: Script) void {
     if (script.answer_options) {
         var out: [64]u8 = undefined;
         var w: Io.Writer = .fixed(&out);
-        w.writeInt(u16, @intFromEnum(packet.Opcode.oack), .big) catch return;
+        w.writeInt(u16, @backingInt(packet.Opcode.oack), .big) catch return;
         w.print("blksize\x00{d}\x00tsize\x00{d}\x00", .{
             script.announce_block_size orelse script.block_size,
             script.file.len,
@@ -290,7 +290,7 @@ fn run(s: *Server, script: Script) void {
         defer foreign.close(testing.io);
 
         var out: [16]u8 = undefined;
-        std.mem.writeInt(u16, out[0..2], @intFromEnum(packet.Opcode.data), .big);
+        std.mem.writeInt(u16, out[0..2], @backingInt(packet.Opcode.data), .big);
         std.mem.writeInt(u16, out[2..4], 1, .big);
         @memcpy(out[4..12], "INTRUDER");
         foreign.send(testing.io, &client, out[0..12]) catch return;
@@ -319,7 +319,7 @@ fn run(s: *Server, script: Script) void {
         }
 
         var out: [packet.max_datagram_bytes]u8 = undefined;
-        std.mem.writeInt(u16, out[0..2], @intFromEnum(packet.Opcode.data), .big);
+        std.mem.writeInt(u16, out[0..2], @backingInt(packet.Opcode.data), .big);
         std.mem.writeInt(u16, out[2..4], block, .big);
         @memcpy(out[4..][0..take], bytes);
         const datagram = out[0 .. 4 + take];
@@ -354,7 +354,7 @@ fn takeAck(s: *Server, transfer: Io.net.Socket, buffer: []u8, expected: u16) boo
         s.ack_storage[at] = block;
         s.ack_count.store(at + 1, .release);
     }
-    return opcode == @intFromEnum(packet.Opcode.ack) and block == expected;
+    return opcode == @backingInt(packet.Opcode.ack) and block == expected;
 }
 
 test "the fixture serves one file and records every acknowledgement" {

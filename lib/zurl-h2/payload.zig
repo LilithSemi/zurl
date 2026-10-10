@@ -885,7 +885,7 @@ test "a SETTINGS ACK round-trips and carries nothing" {
 test "a SETTINGS length that is not a multiple of six is a fault" {
     inline for ([_]u24{ 1, 2, 3, 4, 5, 7, 11, 13 }) |len| {
         const header: Header = .{ .length = len, .type = .settings, .flags = 0, .stream_id = 0 };
-        const bytes = [_]u8{0} ** len;
+        const bytes: [len]u8 = @splat(0);
         try testing.expectError(error.SettingsLengthInvalid, Frame.parse(header, &bytes));
     }
     try testing.expectEqual(
@@ -1004,7 +1004,7 @@ test "a PING reply carries the same octets back with ACK set" {
 test "a PING that is not eight octets is a fault" {
     inline for ([_]u24{ 0, 1, 7, 9, 16 }) |len| {
         const header: Header = .{ .length = len, .type = .ping, .flags = 0, .stream_id = 0 };
-        const bytes = [_]u8{0} ** len;
+        const bytes: [len]u8 = @splat(0);
         try testing.expectError(error.PingLengthInvalid, Frame.parse(header, &bytes));
     }
     try testing.expectEqual(
@@ -1015,7 +1015,7 @@ test "a PING that is not eight octets is a fault" {
 
 test "a PING on a stream is a fault" {
     const header: Header = .{ .length = 8, .type = .ping, .flags = 0, .stream_id = 1 };
-    try testing.expectError(error.StreamIdNonZero, Frame.parse(header, &(.{0} ** 8)));
+    try testing.expectError(error.StreamIdNonZero, Frame.parse(header, &@as([8]u8, @splat(0))));
 }
 
 test "GOAWAY round-trips through its octets" {
@@ -1062,14 +1062,14 @@ test "the reserved bit of the GOAWAY last stream identifier is dropped" {
 test "a GOAWAY shorter than eight octets is a fault" {
     inline for ([_]u24{ 0, 1, 4, 7 }) |len| {
         const header: Header = .{ .length = len, .type = .goaway, .flags = 0, .stream_id = 0 };
-        const bytes = [_]u8{0} ** len;
+        const bytes: [len]u8 = @splat(0);
         try testing.expectError(error.GoawayLengthInvalid, Frame.parse(header, &bytes));
     }
 }
 
 test "a GOAWAY on a stream is a fault" {
     const header: Header = .{ .length = 8, .type = .goaway, .flags = 0, .stream_id = 1 };
-    try testing.expectError(error.StreamIdNonZero, Frame.parse(header, &(.{0} ** 8)));
+    try testing.expectError(error.StreamIdNonZero, Frame.parse(header, &@as([8]u8, @splat(0))));
 }
 
 test "WINDOW_UPDATE round-trips through its four octets" {
@@ -1120,7 +1120,7 @@ test "a WINDOW_UPDATE of the wrong length is a fault" {
             .flags = 0,
             .stream_id = 1,
         };
-        const bytes = [_]u8{0} ** len;
+        const bytes: [len]u8 = @splat(0);
         try testing.expectError(error.WindowUpdateLengthInvalid, Frame.parse(header, &bytes));
     }
 }
@@ -1148,16 +1148,16 @@ test "a CONTINUATION on stream 0 is a fault" {
 }
 
 test "an unknown frame type parses into its octets rather than a fault" {
-    const header: Header = .{ .length = 3, .type = @enumFromInt(0x0a), .flags = 0xff, .stream_id = 9 };
+    const header: Header = .{ .length = 3, .type = @fromBackingInt(@intCast(0x0a)), .flags = 0xff, .stream_id = 9 };
     const got = try Frame.parse(header, "abc");
     try testing.expectEqualSlices(u8, "abc", got.payload.unknown);
-    try testing.expectEqual(@as(u8, 0x0a), @intFromEnum(got.header.type));
+    try testing.expectEqual(@as(u8, 0x0a), @backingInt(got.header.type));
 }
 
 test "an unknown frame type on stream 0 is still not a fault" {
     // Section 4.1 gives no stream rule for a type the receiver does not
     // know, because it does not know what the type means.
-    const header: Header = .{ .length = 0, .type = @enumFromInt(0xff), .flags = 0, .stream_id = 0 };
+    const header: Header = .{ .length = 0, .type = @fromBackingInt(@intCast(0xff)), .flags = 0, .stream_id = 0 };
     const got = try Frame.parse(header, &.{});
     try testing.expectEqualSlices(u8, "", got.payload.unknown);
 }

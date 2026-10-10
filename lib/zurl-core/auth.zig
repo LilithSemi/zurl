@@ -521,7 +521,7 @@ test "basicValueSize is exactly the buffer basicValue needs" {
         .{ .user = "a", .password = "b" },
         .{ .user = "alice", .password = "s3cret" },
         // The length that broke zurl: a cache token of 1200 characters.
-        .{ .user = "cache", .password = "t" ** 1200 },
+        .{ .user = "cache", .password = &@as([1200]u8, @splat('t')) },
         // Every base64 padding case, so no rounding is missed.
         .{ .user = "u", .password = "1" },
         .{ .user = "u", .password = "12" },
@@ -588,7 +588,7 @@ test "digestValueSize is exactly the length digestValue writes" {
         // A password of 1200 characters, which never travels in a digest
         // value but must not break the measurement either.
         .{
-            .credentials = .{ .user = "cache", .password = "t" ** 1200 },
+            .credentials = .{ .user = "cache", .password = &@as([1200]u8, @splat('t')) },
             .challenge = with_qop,
             .method = "GET",
             .uri = "/nix-cache-info",

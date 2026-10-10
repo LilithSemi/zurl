@@ -631,13 +631,13 @@ test "the fixture's own encoder writes the lengths X.690 asks for" {
     try testing.expectEqualSlices(u8, &.{ 0x04, 0x03, 'a', 'b', 'c' }, e.written());
 
     e = .init();
-    e.octetString("x" ** 200);
+    e.octetString(&@as([200]u8, @splat('x')));
     try testing.expectEqual(@as(u8, 0x81), e.written()[1]);
     try testing.expectEqual(@as(u8, 200), e.written()[2]);
     try testing.expectEqual(@as(usize, 203), e.written().len);
 
     e = .init();
-    e.octetString("y" ** 300);
+    e.octetString(&@as([300]u8, @splat('y')));
     try testing.expectEqual(@as(u8, 0x82), e.written()[1]);
     try testing.expectEqual(@as(u8, 0x01), e.written()[2]);
     try testing.expectEqual(@as(u8, 0x2c), e.written()[3]);

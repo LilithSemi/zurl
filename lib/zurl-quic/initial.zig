@@ -224,7 +224,7 @@ test "a connection id longer than the bound is refused rather than written past 
     // has no meaning above 255.
     const too_long: [packet.max_connection_id_len + 1]u8 = @splat(0);
     try testing.expectError(error.OdcidTooLong, retryIntegrityTag(&too_long, &.{1}));
-    try testing.expectError(error.OdcidTooLong, verifyRetry(&too_long, &([_]u8{0} ** 20)));
+    try testing.expectError(error.OdcidTooLong, verifyRetry(&too_long, &@as([20]u8, @splat(0))));
 
     const huge: [300]u8 = @splat(7);
     try testing.expectError(error.OdcidTooLong, retryIntegrityTag(&huge, &.{1}));

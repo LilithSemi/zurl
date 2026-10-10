@@ -385,10 +385,10 @@ test "the bounds this file keeps are the ones its comment names" {
 test "the error set names the remote fault apart from the channel faults" {
     // A remote `scp` that wrote `\x02 No such file` is not an SSH channel
     // that broke, and a caller maps the two onto different exit codes.
-    const set = @typeInfo(Error).error_set.?;
+    const set = @typeInfo(Error).error_set.error_names.?;
     var found_remote = false;
-    for (set) |member| {
-        if (std.mem.eql(u8, member.name, "RemoteFault")) found_remote = true;
+    for (set) |name| {
+        if (std.mem.eql(u8, name, "RemoteFault")) found_remote = true;
     }
     try testing.expect(found_remote);
 }

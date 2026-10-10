@@ -51,7 +51,7 @@ pub const Kind = enum(u64) {
             .push_promise => "PUSH_PROMISE",
             .goaway => "GOAWAY",
             .max_push_id => "MAX_PUSH_ID",
-            _ => if (isReserved(@intFromEnum(self))) "RESERVED" else "UNKNOWN",
+            _ => if (isReserved(@backingInt(self))) "RESERVED" else "UNKNOWN",
         };
     }
 
@@ -132,7 +132,7 @@ pub fn readHeader(bytes: []const u8) Error!?Header {
     if (isReservedHttp2(kind_field.value)) return error.FrameUnexpected;
     const length_field = varint.decode(bytes[kind_field.len..]) catch return null;
     return .{
-        .kind = @enumFromInt(kind_field.value),
+        .kind = @fromBackingInt(@intCast(kind_field.value)),
         .length = length_field.value,
         .header_len = kind_field.len + length_field.len,
     };
@@ -140,7 +140,7 @@ pub fn readHeader(bytes: []const u8) Error!?Header {
 
 /// How many bytes `writeHeader` writes for this type and length.
 pub fn headerLen(kind: Kind, length: u64) usize {
-    const type_len = varint.encodedLen(@intFromEnum(kind)) catch unreachable;
+    const type_len = varint.encodedLen(@backingInt(kind)) catch unreachable;
     const length_len = varint.encodedLen(length) catch unreachable;
     return type_len + length_len;
 }
@@ -155,7 +155,7 @@ pub fn writeHeader(kind: Kind, length: u64, out: []u8) []u8 {
     std.debug.assert(out.len >= headerLen(kind, length));
     var at: usize = 0;
     var scratch: [varint.max_bytes]u8 = undefined;
-    const type_bytes = varint.encode(&scratch, @intFromEnum(kind)) catch unreachable;
+    const type_bytes = varint.encode(&scratch, @backingInt(kind)) catch unreachable;
     @memcpy(out[at..][0..type_bytes.len], type_bytes);
     at += type_bytes.len;
     const length_bytes = varint.encode(&scratch, length) catch unreachable;
@@ -239,13 +239,13 @@ test "the four HTTP/2 frame types are refused and never ignored" {
     // into an HTTP/3 stream and be stepped over as if it were harmless.
     for (reserved_http2_types) |t| {
         var out: [max_header_bytes]u8 = undefined;
-        const written = writeHeader(@enumFromInt(t), 0, &out);
+        const written = writeHeader(@fromBackingInt(@intCast(t)), 0, &out);
         try testing.expectError(error.FrameUnexpected, readHeader(written));
     }
     // The types either side of them are not refused.
     for ([_]u64{ 0x00, 0x01, 0x03, 0x04, 0x05, 0x07, 0x0a, 0x0d }) |t| {
         var out: [max_header_bytes]u8 = undefined;
-        const written = writeHeader(@enumFromInt(t), 0, &out);
+        const written = writeHeader(@fromBackingInt(@intCast(t)), 0, &out);
         try testing.expect(try readHeader(written) != null);
     }
 }
@@ -256,16 +256,16 @@ test "a reserved frame type reads as a frame this build does not know" {
     var out: [max_header_bytes]u8 = undefined;
     for ([_]u64{ 0x21, 0x40, 0x5f, 0x1f * 100 + 0x21 }) |t| {
         try testing.expect(isReserved(t));
-        const written = writeHeader(@enumFromInt(t), 3, &out);
+        const written = writeHeader(@fromBackingInt(@intCast(t)), 3, &out);
         const read = (try readHeader(written)).?;
         try testing.expect(!read.kind.isKnown());
         try testing.expectEqualStrings("RESERVED", read.kind.name());
         try testing.expectEqual(@as(u64, 3), read.length);
     }
     // A type nobody defined reads the same way.
-    const unknown = writeHeader(@enumFromInt(0x22), 0, &out);
+    const unknown = writeHeader(@fromBackingInt(@intCast(0x22)), 0, &out);
     try testing.expect(!(try readHeader(unknown)).?.kind.isKnown());
-    try testing.expectEqualStrings("UNKNOWN", @as(Kind, @enumFromInt(0x22)).name());
+    try testing.expectEqualStrings("UNKNOWN", @as(Kind, @fromBackingInt(@intCast(0x22))).name());
 }
 
 /// Writes `value` as a varint of exactly `width` bytes.
@@ -327,7 +327,7 @@ test "a frame type is read by its value and never by its bytes" {
     // wide, so the value comparison holds in both directions.
     {
         var bytes: [varint.max_bytes + 1]u8 = undefined;
-        const head = wideVarint(&wide, varint.max_bytes, @intFromEnum(Kind.headers));
+        const head = wideVarint(&wide, varint.max_bytes, @backingInt(Kind.headers));
         @memcpy(bytes[0..head.len], head);
         bytes[head.len] = 0x05;
         const read = (try readHeader(bytes[0 .. head.len + 1])).?;

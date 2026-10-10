@@ -117,8 +117,8 @@ pub const Algorithm = enum {
 
     /// The algorithm `text` names, or null.
     pub fn fromName(text: []const u8) ?Algorithm {
-        inline for (@typeInfo(Algorithm).@"enum".fields) |field| {
-            const candidate: Algorithm = @enumFromInt(field.value);
+        inline for (@typeInfo(Algorithm).@"enum".field_names) |field_name| {
+            const candidate: Algorithm = @field(Algorithm, field_name);
             if (std.mem.eql(u8, text, candidate.name())) return candidate;
         }
         return null;
@@ -1163,9 +1163,9 @@ test "a derivation that asks for too many rounds is refused before it runs" {
     var blob_storage: [64]u8 = undefined;
     var blob: wire.Writer = .init(&blob_storage);
     try blob.string("ssh-ed25519");
-    try blob.string(&[_]u8{0} ** 32);
+    try blob.string(&@as([32]u8, @splat(0)));
     try w.string(blob.written());
-    try w.string(&[_]u8{0} ** 16);
+    try w.string(&@as([16]u8, @splat(0)));
 
     var key: PrivateKey = undefined;
     try testing.expectError(
@@ -1187,9 +1187,9 @@ test "an encrypted key with a cipher or a derivation this build refuses says whi
     var blob_storage: [64]u8 = undefined;
     var blob: wire.Writer = .init(&blob_storage);
     try blob.string("ssh-ed25519");
-    try blob.string(&[_]u8{0} ** 32);
+    try blob.string(&@as([32]u8, @splat(0)));
     try w.string(blob.written());
-    try w.string(&[_]u8{0} ** 16);
+    try w.string(&@as([16]u8, @splat(0)));
     try testing.expectError(
         error.PrivateKeyCipherUnsupported,
         parseContainer(&key, storage[0 .. magic.len + w.at], "pw"),
@@ -1201,7 +1201,7 @@ test "an encrypted key with a cipher or a derivation this build refuses says whi
     try second.string("");
     try second.uint32(1);
     try second.string(blob.written());
-    try second.string(&[_]u8{0} ** 16);
+    try second.string(&@as([16]u8, @splat(0)));
     try testing.expectError(
         error.PrivateKeyKdfUnsupported,
         parseContainer(&key, storage[0 .. magic.len + second.at], "pw"),

@@ -170,7 +170,7 @@ test "a fifth continuation byte is refused rather than read" {
 
     // A run of nothing but continuation bytes, longer than any packet
     // header, is refused after the fourth and not after the last.
-    const forever = [_]u8{0xff} ** 64;
+    const forever: [64]u8 = @splat(0xff);
     try testing.expectError(error.TooManyBytes, decode(&forever));
 }
 

@@ -225,13 +225,13 @@ test "next counts the line each option came from" {
 test "an option name at the bound is accepted and one past it is refused" {
     // Both sides. A parser that refused every long name, or that refused
     // none, passes only one of these two.
-    const at_bound = "-" ++ "Q" ** max_option_name_bytes ++ "\n";
+    const at_bound = "-" ++ @as([max_option_name_bytes]u8, @splat('Q')) ++ "\n";
     var accepted: Iterator = .init(at_bound);
     var buf: [64]u8 = undefined;
     const opt = (try accepted.next(&buf)).?;
     try std.testing.expectEqual(max_option_name_bytes, opt.name.len);
 
-    const past_bound = "-" ++ "Q" ** (max_option_name_bytes + 1) ++ "\n";
+    const past_bound = "-" ++ @as([max_option_name_bytes + 1]u8, @splat('Q')) ++ "\n";
     var refused: Iterator = .init(past_bound);
     try std.testing.expectError(error.OptionNameTooLong, refused.next(&buf));
 }
@@ -240,7 +240,7 @@ test "a refused line does not stop the lines after it" {
     // A caller that treats a fault in the default config file as a
     // warning reads on. The iterator has already stepped past the line it
     // refused, so the next call returns the next option.
-    const text = "-" ++ "Q" ** (max_option_name_bytes + 1) ++ "\n--silent\n";
+    const text = "-" ++ @as([max_option_name_bytes + 1]u8, @splat('Q')) ++ "\n--silent\n";
     var it: Iterator = .init(text);
     var buf: [64]u8 = undefined;
     try std.testing.expectError(error.OptionNameTooLong, it.next(&buf));

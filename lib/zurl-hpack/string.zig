@@ -167,7 +167,7 @@ test "a string Huffman coding cannot shorten goes out raw" {
 }
 
 test "a string longer than 126 octets needs a continuation on its length" {
-    const text = "a" ** 300;
+    const text = &@as([300]u8, @splat('a'));
     var out: [512]u8 = undefined;
     const written = encode(text, .raw, &out);
     try testing.expectEqualSlices(u8, &.{ 0x7f, 0xad, 0x01 }, written[0..3]);

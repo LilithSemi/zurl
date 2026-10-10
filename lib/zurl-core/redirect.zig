@@ -189,11 +189,11 @@ pub const Set = struct {
 
     /// The set holding nothing. A transfer with this set refuses every
     /// url, which is why `parse` reports it rather than returning it.
-    pub const none: Set = .{ .bits = .initEmpty(), .unnamed = false };
+    pub const none: Set = .{ .bits = .empty, .unnamed = false };
 
     /// Every protocol, named here or not. This is what `all` means in a
     /// list.
-    pub const all: Set = .{ .bits = .initFull(), .unnamed = true };
+    pub const all: Set = .{ .bits = .full, .unnamed = true };
 
     /// The set holding exactly `members`, and no scheme outside
     /// `Protocol`.
@@ -712,21 +712,22 @@ test "--proto-redir starts from its own default and not from every protocol" {
 }
 
 test "a list past either bound is refused rather than read" {
-    const long = "http," ** ((Set.max_list_bytes / 5) + 1);
-    try testing.expectError(error.ProtocolListTooLong, Set.parse(long, transfer_default));
+    const rows: [(Set.max_list_bytes / 5) + 1][5]u8 = @splat("http,".*);
+    const long: [rows.len * 5]u8 = @bitCast(rows);
+    try testing.expectError(error.ProtocolListTooLong, Set.parse(&long, transfer_default));
 
     // Short enough for the byte bound and past the entry bound: each
     // entry here is one byte plus its comma.
-    const many = "," ** (Set.max_entries + 1);
+    const many: [Set.max_entries + 1]u8 = @splat(',');
     try testing.expect(many.len <= Set.max_list_bytes);
-    try testing.expectError(error.ProtocolListTooManyEntries, Set.parse(many, transfer_default));
+    try testing.expectError(error.ProtocolListTooManyEntries, Set.parse(&many, transfer_default));
 }
 
 test "a set at either bound of the entry count is still read" {
     // The bound is checked from both sides. A parser that cut one entry
     // early would fail this.
-    const at_bound = "," ** (Set.max_entries - 1);
-    try testing.expectEqual(transfer_default, try Set.parse(at_bound, transfer_default));
+    const at_bound: [Set.max_entries - 1]u8 = @splat(',');
+    try testing.expectEqual(transfer_default, try Set.parse(&at_bound, transfer_default));
 }
 
 test "a redirect target must pass --proto and --proto-redir together" {

@@ -259,7 +259,7 @@ pub fn init(a: *Authenticator, transport: *Transport, options: Options) void {
     a.options = options;
     a.methods_len = 0;
     a.banner_len = 0;
-    a.tried = .initEmpty();
+    a.tried = .empty;
     a.partial_success = false;
     a.succeeded = false;
     a.counters = .{};

@@ -209,7 +209,7 @@ pub fn handshakeSecrets(
         inline else => |hash| {
             const K = Hkdf(hash);
             const digest_len = Hash(hash).digest_length;
-            const zeroes = [_]u8{0} ** digest_len;
+            const zeroes: [digest_len]u8 = @splat(0);
 
             // Early Secret, with no pre-shared key. RFC 8446 section 7.1
             // makes the input a string of `Hash.length` zero bytes when
@@ -370,7 +370,7 @@ pub fn codeOf(suite: protection.Suite) tls.CipherSuite {
 const testing = std.testing;
 
 test "a secret holds its bytes and clears to nothing" {
-    var secret: Secret = .from(&[_]u8{0xab} ** 32);
+    var secret: Secret = .from(&@as([32]u8, @splat(0xab)));
     try testing.expectEqual(@as(u8, 32), secret.len);
     try testing.expect(secret.isSet());
     try testing.expectEqual(@as(usize, 32), secret.slice().len);
@@ -412,7 +412,7 @@ test "every suite gives a secret of the length its hash names" {
     for ([_]protection.Suite{ .aes_128_gcm, .aes_256_gcm, .chacha20_poly1305 }) |suite| {
         var transcript: Transcript = .init(suite.hash());
         transcript.update("client hello and server hello");
-        const shared = [_]u8{0x11} ** 32;
+        const shared: [32]u8 = @splat(0x11);
         const stage = handshakeSecrets(suite, &shared, transcript.peek().slice());
 
         const want_len = suite.hash().secretLen();
@@ -441,7 +441,7 @@ test "every suite gives a secret of the length its hash names" {
 
 test "one changed transcript byte changes every secret under it" {
     const suite: protection.Suite = .aes_128_gcm;
-    const shared = [_]u8{0x22} ** 32;
+    const shared: [32]u8 = @splat(0x22);
 
     var first: Transcript = .init(suite.hash());
     first.update("client hello");
@@ -472,8 +472,8 @@ test "one changed shared secret byte changes every secret under it" {
     var transcript: Transcript = .init(suite.hash());
     transcript.update("the same messages both times");
 
-    const one = handshakeSecrets(suite, &[_]u8{0x33} ** 32, transcript.peek().slice());
-    const two = handshakeSecrets(suite, &[_]u8{0x34} ** 32, transcript.peek().slice());
+    const one = handshakeSecrets(suite, &@as([32]u8, @splat(0x33)), transcript.peek().slice());
+    const two = handshakeSecrets(suite, &@as([32]u8, @splat(0x34)), transcript.peek().slice());
 
     try testing.expect(!std.mem.eql(u8, one.traffic.client.slice(), two.traffic.client.slice()));
     try testing.expect(!std.mem.eql(u8, one.master.slice(), two.master.slice()));
@@ -483,7 +483,7 @@ test "a Finished message checks under the key its own secret gives" {
     for ([_]protection.Suite{ .aes_128_gcm, .aes_256_gcm, .chacha20_poly1305 }) |suite| {
         var transcript: Transcript = .init(suite.hash());
         transcript.update("hello");
-        const stage = handshakeSecrets(suite, &[_]u8{0x44} ** 32, transcript.peek().slice());
+        const stage = handshakeSecrets(suite, &@as([32]u8, @splat(0x44)), transcript.peek().slice());
 
         const key = finishedKey(suite, &stage.traffic.server);
         try testing.expectEqual(suite.hash().secretLen(), key.len);
@@ -508,7 +508,7 @@ test "a Finished message checks under the key its own secret gives" {
 
 test "a key update gives a new secret and a new key set" {
     const suite: protection.Suite = .aes_128_gcm;
-    const first: Secret = .from(&[_]u8{0x55} ** 32);
+    const first: Secret = .from(&@as([32]u8, @splat(0x55)));
     const second = nextSecret(suite, &first);
     try testing.expectEqual(@as(u8, 32), second.len);
     try testing.expect(!std.mem.eql(u8, first.slice(), second.slice()));

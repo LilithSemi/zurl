@@ -75,13 +75,13 @@ pub const Entry = struct {
     value: u32,
 
     pub fn encode(self: Entry, out: *[entry_len]u8) void {
-        std.mem.writeInt(u16, out[0..2], @intFromEnum(self.id), .big);
+        std.mem.writeInt(u16, out[0..2], @backingInt(self.id), .big);
         std.mem.writeInt(u32, out[2..6], self.value, .big);
     }
 
     pub fn parse(bytes: *const [entry_len]u8) Entry {
         return .{
-            .id = @enumFromInt(std.mem.readInt(u16, bytes[0..2], .big)),
+            .id = @fromBackingInt(@intCast(std.mem.readInt(u16, bytes[0..2], .big))),
             .value = std.mem.readInt(u32, bytes[2..6], .big),
         };
     }
@@ -297,14 +297,14 @@ test "the defaults are the values of RFC 9113 section 6.5.2" {
 }
 
 test "the identifiers carry the numbers of RFC 9113 section 6.5.2" {
-    try testing.expectEqual(@as(u16, 0x01), @intFromEnum(Id.header_table_size));
-    try testing.expectEqual(@as(u16, 0x02), @intFromEnum(Id.enable_push));
-    try testing.expectEqual(@as(u16, 0x03), @intFromEnum(Id.max_concurrent_streams));
-    try testing.expectEqual(@as(u16, 0x04), @intFromEnum(Id.initial_window_size));
-    try testing.expectEqual(@as(u16, 0x05), @intFromEnum(Id.max_frame_size));
-    try testing.expectEqual(@as(u16, 0x06), @intFromEnum(Id.max_header_list_size));
-    try testing.expect(!(@as(Id, @enumFromInt(0x07))).isKnown());
-    try testing.expect(!(@as(Id, @enumFromInt(0x00))).isKnown());
+    try testing.expectEqual(@as(u16, 0x01), @backingInt(Id.header_table_size));
+    try testing.expectEqual(@as(u16, 0x02), @backingInt(Id.enable_push));
+    try testing.expectEqual(@as(u16, 0x03), @backingInt(Id.max_concurrent_streams));
+    try testing.expectEqual(@as(u16, 0x04), @backingInt(Id.initial_window_size));
+    try testing.expectEqual(@as(u16, 0x05), @backingInt(Id.max_frame_size));
+    try testing.expectEqual(@as(u16, 0x06), @backingInt(Id.max_header_list_size));
+    try testing.expect(!(@as(Id, @fromBackingInt(@intCast(0x07)))).isKnown());
+    try testing.expect(!(@as(Id, @fromBackingInt(@intCast(0x00)))).isKnown());
 }
 
 test "one entry round-trips through its six octets" {

@@ -72,7 +72,7 @@ pub const Opcode = enum(u4) {
     /// message, so a reader must be able to tell the two apart before it
     /// knows which opcodes it will ever see.
     pub fn isControl(o: Opcode) bool {
-        return (@intFromEnum(o) & 0x8) != 0;
+        return (@backingInt(o) & 0x8) != 0;
     }
 
     /// Whether RFC 6455 keeps this opcode for later.
@@ -81,7 +81,7 @@ pub const Opcode = enum(u4) {
     /// control opcodes. A peer that sends one is speaking an extension
     /// this build did not agree to.
     pub fn isReserved(o: Opcode) bool {
-        return switch (@intFromEnum(o)) {
+        return switch (@backingInt(o)) {
             0x0, 0x1, 0x2, 0x8, 0x9, 0xa => false,
             else => true,
         };
@@ -185,7 +185,7 @@ pub fn decode(prefix: [prefix_bytes]u8, extra: []const u8) DecodeError!Header {
     // it can be read at face value.
     if ((prefix[0] & 0x70) != 0) return error.ReservedBitSet;
 
-    const opcode: Opcode = @enumFromInt(@as(u4, @truncate(prefix[0] & 0x0f)));
+    const opcode: Opcode = @fromBackingInt(@intCast(@as(u4, @truncate(prefix[0] & 0x0f))));
     if (opcode.isReserved()) return error.ReservedOpcode;
 
     const masked = (prefix[1] & 0x80) != 0;
@@ -245,7 +245,7 @@ pub fn encode(out: *[max_header_bytes]u8, header: Header) []u8 {
     if (header.rsv1) out[0] |= 0x40;
     if (header.rsv2) out[0] |= 0x20;
     if (header.rsv3) out[0] |= 0x10;
-    out[0] |= @intFromEnum(header.opcode);
+    out[0] |= @backingInt(header.opcode);
 
     const mask_bit: u8 = if (header.masked) 0x80 else 0;
     var at: usize = prefix_bytes;
@@ -291,10 +291,10 @@ test "the opcode table names the control frames and the reserved ones" {
     try testing.expect(Opcode.pong.isControl());
 
     for ([_]u4{ 0x0, 0x1, 0x2, 0x8, 0x9, 0xa }) |raw| {
-        try testing.expect(!@as(Opcode, @enumFromInt(raw)).isReserved());
+        try testing.expect(!@as(Opcode, @fromBackingInt(@intCast(raw))).isReserved());
     }
     for ([_]u4{ 0x3, 0x4, 0x5, 0x6, 0x7, 0xb, 0xc, 0xd, 0xe, 0xf }) |raw| {
-        try testing.expect(@as(Opcode, @enumFromInt(raw)).isReserved());
+        try testing.expect(@as(Opcode, @fromBackingInt(@intCast(raw))).isReserved());
     }
 }
 

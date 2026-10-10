@@ -56,9 +56,9 @@ pub const RedirectMethods = struct {
     /// flag.
     pub fn keeps(m: RedirectMethods, status: u16) bool {
         return switch (status) {
-            @intFromEnum(std.http.Status.moved_permanently) => m.post301,
-            @intFromEnum(std.http.Status.found) => m.post302,
-            @intFromEnum(std.http.Status.see_other) => m.post303,
+            @backingInt(std.http.Status.moved_permanently) => m.post301,
+            @backingInt(std.http.Status.found) => m.post302,
+            @backingInt(std.http.Status.see_other) => m.post303,
             else => false,
         };
     }
@@ -2044,13 +2044,13 @@ test "the proxy credential fields cannot hold an origin credential" {
     // put one there by mistake.
     const credential_fields = comptime blk: {
         var found: usize = 0;
-        for (@typeInfo(Proxy).@"struct".fields) |field| {
-            if (std.mem.eql(u8, field.name, "authorization")) found += 1;
-            if (std.mem.eql(u8, field.name, "user")) found += 1;
-            if (std.mem.eql(u8, field.name, "password")) found += 1;
+        for (@typeInfo(Proxy).@"struct".field_names) |field_name| {
+            if (std.mem.eql(u8, field_name, "authorization")) found += 1;
+            if (std.mem.eql(u8, field_name, "user")) found += 1;
+            if (std.mem.eql(u8, field_name, "password")) found += 1;
             // No field of this struct names the origin at all.
-            if (std.mem.indexOf(u8, field.name, "origin") != null) break :blk 0;
-            if (std.mem.indexOf(u8, field.name, "secret") != null) break :blk 0;
+            if (std.mem.indexOf(u8, field_name, "origin") != null) break :blk 0;
+            if (std.mem.indexOf(u8, field_name, "secret") != null) break :blk 0;
         }
         break :blk found;
     };

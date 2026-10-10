@@ -375,8 +375,8 @@ test "each QPACK stream arrives once as well" {
 
 test "a stream of a type this build does not read is abandoned and counted" {
     var c: Connection = .init(.client, .{});
-    try testing.expectEqual(StreamRole.abandon, try c.onPeerUniStream(3, @enumFromInt(0x21)));
-    try testing.expectEqual(StreamRole.abandon, try c.onPeerUniStream(7, @enumFromInt(0x22)));
+    try testing.expectEqual(StreamRole.abandon, try c.onPeerUniStream(3, @fromBackingInt(@intCast(0x21))));
+    try testing.expectEqual(StreamRole.abandon, try c.onPeerUniStream(7, @fromBackingInt(@intCast(0x22))));
     try testing.expectEqual(@as(u64, 2), c.abandoned_streams);
     // Two of them is not a fault: the type is not a critical stream, so
     // there is nothing to be a second copy of.
@@ -401,7 +401,7 @@ test "closing a critical stream closes the connection" {
 test "SETTINGS must be the first frame on the control stream" {
     // RFC 9114 section 6.2.1. Every other type, known or not, is
     // H3_MISSING_SETTINGS before SETTINGS has arrived.
-    for ([_]frame.Kind{ .goaway, .max_push_id, .data, .headers, @enumFromInt(0x21) }) |kind| {
+    for ([_]frame.Kind{ .goaway, .max_push_id, .data, .headers, @fromBackingInt(@intCast(0x21)) }) |kind| {
         var c: Connection = .init(.client, .{});
         try testing.expectError(error.MissingSettings, c.onControlFrame(kind));
         try testing.expect(!c.settings_seen);
@@ -436,8 +436,8 @@ test "an unknown frame on the control stream is stepped over once SETTINGS has a
     // **`skip` and not `act`**, so the caller never has to hold the
     // payload of a frame it does not read. RFC 9114 section 9 asks for the
     // frame to be ignored whatever its length.
-    try testing.expectEqual(Disposition.skip, try c.onControlFrame(@enumFromInt(0x21)));
-    try testing.expectEqual(Disposition.skip, try c.onControlFrame(@enumFromInt(0x22)));
+    try testing.expectEqual(Disposition.skip, try c.onControlFrame(@fromBackingInt(@intCast(0x21))));
+    try testing.expectEqual(Disposition.skip, try c.onControlFrame(@fromBackingInt(@intCast(0x22))));
     try testing.expectEqual(@as(u64, 2), c.ignored_frames);
 }
 
@@ -528,11 +528,11 @@ test "an unknown frame on a request stream is stepped over wherever it appears" 
     var m: Message = .{};
     // RFC 9114 section 9: before the head, after it, and after the
     // trailers.
-    try testing.expectEqual(Disposition.skip, try m.onFrame(@enumFromInt(0x21), false));
+    try testing.expectEqual(Disposition.skip, try m.onFrame(@fromBackingInt(@intCast(0x21)), false));
     _ = try m.onFrame(.headers, false);
-    try testing.expectEqual(Disposition.skip, try m.onFrame(@enumFromInt(0x22), false));
+    try testing.expectEqual(Disposition.skip, try m.onFrame(@fromBackingInt(@intCast(0x22)), false));
     _ = try m.onFrame(.headers, false);
-    try testing.expectEqual(Disposition.skip, try m.onFrame(@enumFromInt(0x40), false));
+    try testing.expectEqual(Disposition.skip, try m.onFrame(@fromBackingInt(@intCast(0x40)), false));
 }
 
 test "a second onSettings is a protocol error and not a panic" {

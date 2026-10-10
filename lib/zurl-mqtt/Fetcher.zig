@@ -1488,10 +1488,10 @@ test "a named client identifier is used, and a bad one is refused by name" {
         error.InvalidUrl,
         f.resolveClientId(.{ .client_id = "" }, &d),
     );
-    const long = "x" ** (max_client_id_bytes + 1);
+    const long: [max_client_id_bytes + 1]u8 = @splat('x');
     try testing.expectError(
         error.InvalidUrl,
-        f.resolveClientId(.{ .client_id = long }, &d),
+        f.resolveClientId(.{ .client_id = &long }, &d),
     );
     try testing.expectError(
         error.InvalidUrl,
@@ -1499,10 +1499,10 @@ test "a named client identifier is used, and a bad one is refused by name" {
     );
 
     // Exactly the bound still reads.
-    const fitted = "y" ** max_client_id_bytes;
+    const fitted: [max_client_id_bytes]u8 = @splat('y');
     try testing.expectEqualStrings(
-        fitted,
-        try f.resolveClientId(.{ .client_id = fitted }, null),
+        &fitted,
+        try f.resolveClientId(.{ .client_id = &fitted }, null),
     );
 }
 

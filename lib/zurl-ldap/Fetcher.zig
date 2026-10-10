@@ -1268,7 +1268,7 @@ fn Dispatch(comptime Front: type) type {
             return .{
                 // curl reports the LDAP result code as `%{http_code}`,
                 // measured: a search that worked printed `000`.
-                .status = @intCast(@intFromEnum(body.status)),
+                .status = @intCast(@backingInt(body.status)),
                 .content_length = body.length,
                 .transfer_encoding = .none,
                 .body = body.reader,
@@ -1502,8 +1502,8 @@ test "every session fault has a zurl error and none of them is a crash" {
     // The switch in `sessionFault` names every member, so a new one in
     // `Session.Error` is a compile error here. This walks the set and
     // proves each name has a number.
-    inline for (@typeInfo(Session.Error).error_set.?) |field| {
-        const err = @field(Session.Error, field.name);
+    inline for (@typeInfo(Session.Error).error_set.error_names.?) |name| {
+        const err = @field(Session.Error, name);
         const mapped = sessionFault(err);
         _ = zurl_core.errors.curlCode(mapped);
     }

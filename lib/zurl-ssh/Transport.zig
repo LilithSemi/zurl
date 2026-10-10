@@ -217,9 +217,6 @@ pub const KexError =
         /// The peer sent a message that this build refuses inside a key
         /// exchange. See `housekeepingIsViolation`.
         StrictKexViolation,
-        /// The ephemeral key pair could not be drawn. The entropy source
-        /// gave a seed no key could be built from, again and again.
-        EphemeralKeyFailed,
     };
 
 /// Why a write stopped.
@@ -724,16 +721,12 @@ fn runKex(t: *Transport, received: ?[]const u8) KexError!void {
 
     // The ephemeral key pair. The seed comes from `io.randomSecure`,
     // which makes a syscall each time and keeps no state in this process.
-    var pair: X25519.KeyPair = undefined;
-    var attempts: usize = 0;
-    while (true) : (attempts += 1) {
-        if (attempts == 16) return error.EphemeralKeyFailed;
+    var pair: X25519.KeyPair = pair: {
         var seed: [X25519.seed_length]u8 = undefined;
         defer std.crypto.secureZero(u8, &seed);
         try t.io.randomSecure(&seed);
-        pair = X25519.KeyPair.generateDeterministic(seed) catch continue;
-        break;
-    }
+        break :pair X25519.KeyPair.generateDeterministic(seed);
+    };
     defer std.crypto.secureZero(u8, &pair.secret_key);
 
     var init_storage: [kex.ecdh_init_bytes]u8 = undefined;
@@ -777,7 +770,7 @@ fn runKex(t: *Transport, received: ?[]const u8) KexError!void {
     // The `SSH_MSG_NEWKEYS` this side sends goes out under the old
     // cipher, and every packet after it goes out under the new one. RFC
     // 4253 section 7.3 sets that order.
-    try t.sendPacket(&.{@intFromEnum(messages.Id.newkeys)});
+    try t.sendPacket(&.{@backingInt(messages.Id.newkeys)});
     t.installSendCipher(choice, exchange_hash, &shared);
 
     const answer = try t.readKexPacket();
@@ -1141,7 +1134,7 @@ fn readPacket(t: *Transport) ReadError![]const u8 {
 /// 20 to 29 are the negotiation and 30 to 49 belong to whichever method
 /// the negotiation chose. None of them means anything between exchanges.
 fn isKexRange(id: messages.Id) bool {
-    const number = @intFromEnum(id);
+    const number = @backingInt(id);
     return number >= 20 and number <= 49;
 }
 
@@ -1270,7 +1263,7 @@ test "the key exchange range is 20 to 49 and nothing else" {
     // RFC 4250 section 4.1.2. A message inside this range that arrives
     // between exchanges is refused, and one outside it goes to a caller.
     for (0..256) |number| {
-        const id: messages.Id = @enumFromInt(number);
+        const id: messages.Id = @fromBackingInt(@intCast(number));
         try testing.expectEqual(number >= 20 and number <= 49, isKexRange(id));
     }
     try testing.expect(isKexRange(.kexinit));

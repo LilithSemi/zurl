@@ -40,13 +40,13 @@ pub const Code = enum(u64) {
     /// The code that carries TLS alert `alert`. RFC 9000 section 20.1
     /// puts the alert description in the low byte.
     pub fn fromAlert(description: u8) Code {
-        return @enumFromInt(crypto_error_first + description);
+        return @fromBackingInt(@intCast(crypto_error_first + description));
     }
 
     /// The TLS alert this code carries, or null for a code that carries
     /// none.
     pub fn alert(self: Code) ?u8 {
-        const value = @intFromEnum(self);
+        const value = @backingInt(self);
         if (value < crypto_error_first or value > crypto_error_first + 0xff) return null;
         return @truncate(value - crypto_error_first);
     }
@@ -83,13 +83,13 @@ pub const Code = enum(u64) {
 const testing = std.testing;
 
 test "every code RFC 9000 table 7 lists has the number the table gives it" {
-    try testing.expectEqual(@as(u64, 0x00), @intFromEnum(Code.no_error));
-    try testing.expectEqual(@as(u64, 0x03), @intFromEnum(Code.flow_control_error));
-    try testing.expectEqual(@as(u64, 0x04), @intFromEnum(Code.stream_limit_error));
-    try testing.expectEqual(@as(u64, 0x05), @intFromEnum(Code.stream_state_error));
-    try testing.expectEqual(@as(u64, 0x06), @intFromEnum(Code.final_size_error));
-    try testing.expectEqual(@as(u64, 0x0a), @intFromEnum(Code.protocol_violation));
-    try testing.expectEqual(@as(u64, 0x10), @intFromEnum(Code.no_viable_path));
+    try testing.expectEqual(@as(u64, 0x00), @backingInt(Code.no_error));
+    try testing.expectEqual(@as(u64, 0x03), @backingInt(Code.flow_control_error));
+    try testing.expectEqual(@as(u64, 0x04), @backingInt(Code.stream_limit_error));
+    try testing.expectEqual(@as(u64, 0x05), @backingInt(Code.stream_state_error));
+    try testing.expectEqual(@as(u64, 0x06), @backingInt(Code.final_size_error));
+    try testing.expectEqual(@as(u64, 0x0a), @backingInt(Code.protocol_violation));
+    try testing.expectEqual(@as(u64, 0x10), @backingInt(Code.no_viable_path));
     try testing.expectEqualStrings("FLOW_CONTROL_ERROR", Code.flow_control_error.name());
 }
 
@@ -98,11 +98,11 @@ test "a TLS alert travels in the reserved range and comes back out of it" {
     // low byte is the alert description.
     const bad_certificate: u8 = 42;
     const code: Code = .fromAlert(bad_certificate);
-    try testing.expectEqual(@as(u64, 0x012a), @intFromEnum(code));
+    try testing.expectEqual(@as(u64, 0x012a), @backingInt(code));
     try testing.expectEqual(@as(?u8, bad_certificate), code.alert());
     try testing.expectEqualStrings("CRYPTO_ERROR", code.name());
 
     try testing.expectEqual(@as(?u8, null), Code.protocol_violation.alert());
-    try testing.expectEqual(@as(?u8, null), @as(Code, @enumFromInt(0x0200)).alert());
-    try testing.expectEqualStrings("UNKNOWN", @as(Code, @enumFromInt(0x0200)).name());
+    try testing.expectEqual(@as(?u8, null), @as(Code, @fromBackingInt(@intCast(0x0200))).alert());
+    try testing.expectEqualStrings("UNKNOWN", @as(Code, @fromBackingInt(@intCast(0x0200))).name());
 }

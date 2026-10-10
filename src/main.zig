@@ -2026,14 +2026,14 @@ test "a netrc token of 1200 characters authenticates, and never reaches the outp
     try server.start(&.{"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"});
     defer server.stop();
 
-    const token = "t" ** 1200;
+    const token: [1200]u8 = @splat('t');
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const netrc_text = try std.fmt.allocPrint(
         testing.allocator,
         "machine 127.0.0.1 login cache password {s}\n",
-        .{token},
+        .{&token},
     );
     defer testing.allocator.free(netrc_text);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "netrc", .data = netrc_text });
@@ -2058,15 +2058,15 @@ test "a netrc token of 1200 characters authenticates, and never reaches the outp
     const head = server.requestHead(0).?;
     try testing.expectEqual(@as(usize, 1), test_server.countAuthorizationHeaders(head));
 
-    const size = zurl_core.auth.basicValueSize(.{ .user = "cache", .password = token });
+    const size = zurl_core.auth.basicValueSize(.{ .user = "cache", .password = &token });
     const expected_buf = try testing.allocator.alloc(u8, size);
     defer testing.allocator.free(expected_buf);
-    const expected = try zurl_core.auth.basicValue(expected_buf, .{ .user = "cache", .password = token });
+    const expected = try zurl_core.auth.basicValue(expected_buf, .{ .user = "cache", .password = &token });
     try testing.expect(std.mem.indexOf(u8, head, expected) != null);
 
     // The token went on the wire and nowhere else.
-    try testing.expectEqual(@as(?usize, null), std.mem.indexOf(u8, result.stdout, token));
-    try testing.expectEqual(@as(?usize, null), std.mem.indexOf(u8, result.stderr, token));
+    try testing.expectEqual(@as(?usize, null), std.mem.indexOf(u8, result.stdout, &token));
+    try testing.expectEqual(@as(?usize, null), std.mem.indexOf(u8, result.stderr, &token));
 }
 
 test "a credential past the header line bound names its source and prints no secret" {
@@ -2141,8 +2141,8 @@ test "the exit code for every error fits in an exit status" {
     // `run.exitCodeFor` asserts this. A row added to `zurl_core.errors`
     // with a code above 255 would make that assertion fire in a real run,
     // so prove it here instead.
-    inline for (@typeInfo(zurl_core.Error).error_set.?) |field| {
-        const err = @field(zurl_core.Error, field.name);
+    inline for (@typeInfo(zurl_core.Error).error_set.error_names.?) |name| {
+        const err = @field(zurl_core.Error, name);
         try testing.expectEqual(zurl_core.errors.curlCode(err), run.exitCodeFor(err));
     }
 }
@@ -2676,7 +2676,7 @@ test "-J never writes outside the working directory, for any hostile header" {
         "attachment; filename=\"a\x1b[2Kb.txt\"",
         "attachment; filename=\"a\x7fb.txt\"",
         // Past the length bound.
-        "attachment; filename=\"" ++ "x" ** 400 ++ "\"",
+        "attachment; filename=\"" ++ @as([400]u8, @splat('x')) ++ "\"",
         // Shapes with no `filename=` at all, which keep the url's name.
         "attachment",
         "inline",

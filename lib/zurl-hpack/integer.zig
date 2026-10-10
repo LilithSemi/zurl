@@ -189,7 +189,7 @@ test "an integer that runs off the end of the slice is truncated, not read past"
 }
 
 test "a continuation that never ends is refused, not read forever" {
-    const forever = [_]u8{0x1f} ++ [_]u8{0x80} ** 64;
+    const forever = [_]u8{0x1f} ++ @as([64]u8, @splat(0x80));
     try testing.expectError(error.IntegerTooLong, decode(5, &forever));
 }
 
@@ -216,7 +216,7 @@ test "the largest value this build holds decodes and the next one does not" {
     try testing.expectEqual(@as(u32, value_max), (try decode(5, written)).value);
 
     // One more than value_max, in the same shape.
-    var over = [_]u8{0} ** encoded_len_max;
+    var over: [encoded_len_max]u8 = @splat(0);
     @memcpy(over[0..written.len], written);
     over[written.len - 1] += 1;
     try testing.expectError(error.IntegerOverflow, decode(5, over[0..written.len]));

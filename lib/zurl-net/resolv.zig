@@ -2,22 +2,22 @@
 //!
 //! zurl does not resolve a name itself. `std.Io.net.HostName.connect`
 //! does, through the resolver in `std.Io.Threaded`, and that resolver
-//! reads `/etc/resolv.conf` at every lookup. Two values in that file make
-//! the resolver leave its own buffers:
+//! reads `/etc/resolv.conf` at every lookup. One value in that file makes
+//! the resolver leave its own buffers: `options attempts:0`, which the
+//! resolver divides by to get the wait of one attempt.
 //!
-//! - A `search` line longer than 255 octets.
-//!   `std.Io.net.HostName.ResolvConf.parse` copies the rest of the line
-//!   into a 255 octet array with no length check, and then records the
-//!   length it copied. The copy writes past the array, and the slice the
-//!   resolver makes from the recorded length is longer than the array it
-//!   points into.
-//! - `options attempts:0`. The resolver divides by that value to get the
-//!   wait of one attempt.
+//! A pair of values is unsafe together as well. The resolver joins the
+//! host name, a dot, and one search domain in an array of
+//! `std.Io.net.HostName.max_len` octets with no length check, so a long
+//! name and a search list overflow that array together while each one
+//! alone fits.
 //!
-//! A third pair of values is unsafe together. The resolver joins the host
-//! name, a dot, and one search domain in a 255 octet array, again with no
-//! length check, so a long name and a search list overflow that array
-//! together while each one alone fits.
+//! A `search` line longer than that array was a third fault, and Zig
+//! 0.17.0 closed it: `std.Io.net.HostName.ResolvConf.parse` passes over
+//! such a line now, where 0.16.0 copied it in with no length check and
+//! recorded the length it copied. The reading below passes over the same
+//! line, so the join above never sees a domain the resolver did not
+//! keep.
 //!
 //! **The file is local, so none of this is a remote fault, and the
 //! severity is bounded by that.** It is guarded anyway for two reasons. A
@@ -46,9 +46,6 @@ const std = @import("std");
 /// `/etc/resolv.conf` the resolver cannot use, so the sentence a user
 /// reads names the file and the line.
 pub const GuardError = error{
-    /// The `search` or `domain` line is longer than the array the
-    /// resolver copies it into.
-    ResolverSearchListTooLong,
     /// The file holds `options attempts:0`, and the resolver divides by
     /// that value.
     ResolverAttemptsZero,
@@ -162,6 +159,10 @@ pub fn read(reader: *std.Io.Reader) Config {
             // its one search array at every line.
             .domain, .search => {
                 const rest = line_it.rest();
+                // The resolver passes over a line longer than the array
+                // it copies into, so the line names no domain and the
+                // join below never sees one.
+                if (rest.len > buffer_len) continue;
                 config.search_len = rest.len;
                 config.longest_domain = longestDomain(rest);
             },
@@ -184,11 +185,10 @@ fn longestDomain(search: []const u8) usize {
 
 /// Reports whether the resolver can look `name` up under `config`.
 ///
-/// The three checks are in the order the resolver reaches them: it copies
-/// the search list first, then works out the wait of one attempt, then
-/// joins the name with a search domain.
+/// The two checks are in the order the resolver reaches them: it works
+/// out the wait of one attempt first, then joins the name with a search
+/// domain.
 pub fn check(config: Config, name: []const u8) GuardError!void {
-    if (config.search_len > buffer_len) return error.ResolverSearchListTooLong;
     if (config.attempts == 0) return error.ResolverAttemptsZero;
 
     // The resolver skips the search list for a name that already holds
@@ -230,45 +230,44 @@ test "an ordinary file leaves every dial alone" {
     try check(config, "host");
 }
 
-test "a search line longer than the resolver copies it is refused" {
-    // **This is the write.** The resolver copies the rest of the line
-    // into a 255 octet array with no length check, so a 400 octet line
-    // writes 145 octets past the end of it, and then records 400 as the
-    // length. The build a user runs makes that write instead of a panic.
+test "a search line longer than the resolver copies it names no domain" {
+    // The resolver passes over such a line, so this guard must pass over
+    // it too. A guard that refused the file instead would stop a dial on
+    // a machine the resolver serves correctly.
+    //
+    // Zig 0.16.0 copied the rest of the line into the array with no
+    // length check, and a 400 octet line wrote 145 octets past the end of
+    // it. That write is what this guard was first written for.
     var text: [16 + 400]u8 = undefined;
     @memcpy(text[0..7], "search ");
     @memset(text[7..407], 'a');
     text[407] = '\n';
 
-    try testing.expectError(
-        error.ResolverSearchListTooLong,
-        check(readText(text[0..408]), "example.com"),
-    );
+    const skipped = readText(text[0..408]);
+    try testing.expectEqual(@as(usize, 0), skipped.search_len);
+    try testing.expectEqual(@as(usize, 0), skipped.longest_domain);
+    try check(skipped, "example.com");
 }
 
-test "a search line the array holds exactly is not refused" {
-    // The bound is the length of the array and not one less than it. A
-    // guard that refused 255 octets would refuse a file the resolver
-    // handles correctly, which is a working machine zurl would not dial
-    // from.
+test "a search line the array holds exactly is read, and one octet more is not" {
+    // The bound is the length of the array and not one less than it, so
+    // the line that fills it is still a line the resolver reads.
     var text: [8 + 256]u8 = undefined;
     @memcpy(text[0..7], "search ");
-    @memset(text[7..262], 'a');
-    text[262] = '\n';
+    @memset(text[7 .. 7 + buffer_len], 'a');
+    text[7 + buffer_len] = '\n';
 
-    const fits = readText(text[0..263]);
-    try testing.expectEqual(@as(usize, 255), fits.search_len);
+    const fits = readText(text[0 .. 8 + buffer_len]);
+    try testing.expectEqual(buffer_len, fits.search_len);
     // The name holds a dot and `ndots` is 1, so the search list is
     // skipped and only the length of the line is under test here.
     try check(fits, "a.example.com");
 
-    // One octet more is the first length that writes past the array.
-    text[262] = 'a';
-    text[263] = '\n';
-    try testing.expectError(
-        error.ResolverSearchListTooLong,
-        check(readText(text[0..264]), "a.example.com"),
-    );
+    // One octet more is the length the resolver stops reading at.
+    text[7 + buffer_len] = 'a';
+    text[8 + buffer_len] = '\n';
+    const over = readText(text[0 .. 9 + buffer_len]);
+    try testing.expectEqual(@as(usize, 0), over.search_len);
 }
 
 test "attempts of zero is refused before the resolver divides by it" {
@@ -408,9 +407,8 @@ test "a comment is not part of the search list" {
 }
 
 test "a guard fault names which value the resolver cannot use" {
-    // Three faults and three sentences. One name for all of them would
-    // send a user to read a file without saying which line to look at.
-    try testing.expect(GuardError.ResolverSearchListTooLong != GuardError.ResolverAttemptsZero);
+    // Two faults and two sentences. One name for both would send a user
+    // to read a file without saying which line to look at.
     try testing.expect(GuardError.ResolverAttemptsZero != GuardError.ResolverSearchNameTooLong);
 }
 

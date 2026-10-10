@@ -99,7 +99,7 @@ pub const max_client_hello: usize = 2048;
 /// This build holds no client certificate, so the empty list is the only
 /// honest answer, and RFC 8446 makes it the right one.
 pub const empty_certificate = [_]u8{
-    @intFromEnum(tls.HandshakeType.certificate),
+    @backingInt(tls.HandshakeType.certificate),
     0, 0, 4, // body_len
     0, // certificate_request_context of no bytes
     0, 0, 0, // certificate_list of no bytes
@@ -135,7 +135,8 @@ pub const transport_parameters_extension: tls.ExtensionType = .quic_transport_pa
 
 /// The content a CertificateVerify signature covers. RFC 8446 section
 /// 4.4.3.
-const certificate_verify_context = " " ** 64 ++ "TLS 1.3, server CertificateVerify\x00";
+const certificate_verify_context: []const u8 =
+    &(@as([64]u8, @splat(' ')) ++ "TLS 1.3, server CertificateVerify\x00".*);
 
 /// The one key share group a QUIC client hello offers.
 ///
@@ -585,7 +586,7 @@ fn drain(self: *Handshake, level: protection.Level, stream: *CryptoStream) Error
         const ready = stream.available();
         // A handshake message is one type byte and a 24-bit length.
         if (ready.len < 4) return;
-        const kind: tls.HandshakeType = @enumFromInt(ready[0]);
+        const kind: tls.HandshakeType = @fromBackingInt(@intCast(ready[0]));
         const body_len: u32 = (@as(u32, ready[1]) << 16) | (@as(u32, ready[2]) << 8) | ready[3];
         const whole_len = 4 + @as(usize, body_len);
         // **A length the buffer can never hold is a fault, not a wait.** A
@@ -704,7 +705,7 @@ fn handle(
 fn readServerHello(self: *Handshake, whole: []u8, body: []u8) Error!void {
     var d: tls.Decoder = .fromTheirSlice(body);
     try d.ensure(2 + 32 + 1);
-    if (d.decode(u16) != @intFromEnum(tls.ProtocolVersion.tls_1_2)) return error.TlsIllegalParameter;
+    if (d.decode(u16) != @backingInt(tls.ProtocolVersion.tls_1_2)) return error.TlsIllegalParameter;
     const random = d.array(32);
 
     // **A HelloRetryRequest is a ServerHello with a fixed random.** RFC
@@ -747,7 +748,7 @@ fn readServerHello(self: *Handshake, whole: []u8, body: []u8) Error!void {
                 if (seen_version) return error.TlsIllegalParameter;
                 seen_version = true;
                 try extd.ensure(2);
-                if (extd.decode(u16) != @intFromEnum(tls.ProtocolVersion.tls_1_3)) {
+                if (extd.decode(u16) != @backingInt(tls.ProtocolVersion.tls_1_3)) {
                     return error.TlsBadVersion;
                 }
                 if (!extd.eof()) return error.TlsIllegalParameter;
@@ -819,7 +820,7 @@ fn readEncryptedExtensions(self: *Handshake, body: []u8) Error!void {
 
     var alpn: ?Client.AlpnSelection = null;
     var parameters: ?transport_parameters.Parameters = null;
-    var seen: std.EnumSet(Known) = .initEmpty();
+    var seen: std.EnumSet(Known) = .empty;
 
     while (!extensions.eof()) {
         try extensions.ensure(2 + 2);
@@ -977,7 +978,7 @@ fn readFinished(self: *Handshake, whole: []u8, body: []u8) Error!void {
     // from the hash that was just taken.
     const client_key = schedule.finishedKey(suite, &self.handshake_traffic.client);
     const verify = schedule.verifyData(suite, &client_key, self.transcript.?.peek().slice());
-    self.finished[at + 0] = @intFromEnum(tls.HandshakeType.finished);
+    self.finished[at + 0] = @backingInt(tls.HandshakeType.finished);
     self.finished[at + 1] = 0;
     self.finished[at + 2] = 0;
     self.finished[at + 3] = @intCast(verify.len);
@@ -1007,12 +1008,12 @@ fn writeClientHello(self: *Handshake, parameters: transport_parameters.Parameter
     const alpn_extension = try Client.quic.encodeAlpnExtension(self.alpn_protocols, &alpn_buf);
 
     var w: std.Io.Writer = .fixed(&self.hello);
-    write(&w, &.{@intFromEnum(tls.HandshakeType.client_hello)}) catch
+    write(&w, &.{@backingInt(tls.HandshakeType.client_hello)}) catch
         return error.HandshakeBufferTooSmall;
     const body_at = try open(&w, 3);
 
     // legacy_version is always TLS 1.2 in a TLS 1.3 hello.
-    try writeInt(&w, u16, @intFromEnum(tls.ProtocolVersion.tls_1_2));
+    try writeInt(&w, u16, @backingInt(tls.ProtocolVersion.tls_1_2));
     try write(&w, &self.client_random);
     // **An empty legacy_session_id.** RFC 9001 section 8.4 bars the TLS
     // 1.3 compatibility mode, and the 32 byte fake session id is that
@@ -1021,7 +1022,7 @@ fn writeClientHello(self: *Handshake, parameters: transport_parameters.Parameter
 
     const suites_at = try open(&w, 2);
     for (offered_suites) |suite| {
-        try writeInt(&w, u16, @intFromEnum(schedule.codeOf(suite)));
+        try writeInt(&w, u16, @backingInt(schedule.codeOf(suite)));
     }
     try close(&w, suites_at, 2);
 
@@ -1034,11 +1035,11 @@ fn writeClientHello(self: *Handshake, parameters: transport_parameters.Parameter
     try self.writeServerName(&w);
 
     // supported_groups, RFC 8446 section 4.2.7.
-    try writeInt(&w, u16, @intFromEnum(tls.ExtensionType.supported_groups));
+    try writeInt(&w, u16, @backingInt(tls.ExtensionType.supported_groups));
     const groups_ext = try open(&w, 2);
     const groups_list = try open(&w, 2);
     for (Client.quic.key_share_groups) |group| {
-        try writeInt(&w, u16, @intFromEnum(group));
+        try writeInt(&w, u16, @backingInt(group));
     }
     try close(&w, groups_list, 2);
     try close(&w, groups_ext, 2);
@@ -1046,11 +1047,11 @@ fn writeClientHello(self: *Handshake, parameters: transport_parameters.Parameter
     // signature_algorithms, RFC 8446 section 4.2.3. The same list the
     // vendored TLS client offers, so both transports accept the same
     // certificates.
-    try writeInt(&w, u16, @intFromEnum(tls.ExtensionType.signature_algorithms));
+    try writeInt(&w, u16, @backingInt(tls.ExtensionType.signature_algorithms));
     const sig_ext = try open(&w, 2);
     const sig_list = try open(&w, 2);
     for (signature_algorithms) |scheme| {
-        try writeInt(&w, u16, @intFromEnum(scheme));
+        try writeInt(&w, u16, @backingInt(scheme));
     }
     try close(&w, sig_list, 2);
     try close(&w, sig_ext, 2);
@@ -1061,15 +1062,15 @@ fn writeClientHello(self: *Handshake, parameters: transport_parameters.Parameter
 
     // supported_versions, RFC 8446 section 4.2.1. **TLS 1.3 alone**,
     // because RFC 9001 section 4.2 gives QUIC no other version.
-    try writeInt(&w, u16, @intFromEnum(tls.ExtensionType.supported_versions));
+    try writeInt(&w, u16, @backingInt(tls.ExtensionType.supported_versions));
     try writeInt(&w, u16, 3);
     try writeInt(&w, u8, 2);
-    try writeInt(&w, u16, @intFromEnum(tls.ProtocolVersion.tls_1_3));
+    try writeInt(&w, u16, @backingInt(tls.ProtocolVersion.tls_1_3));
 
     // key_share, RFC 8446 section 4.2.8. One x25519 share, which keeps
     // the whole hello inside the 1200 byte bound RFC 9000 section 14.1
     // puts on a client's first datagram.
-    try writeInt(&w, u16, @intFromEnum(tls.ExtensionType.key_share));
+    try writeInt(&w, u16, @backingInt(tls.ExtensionType.key_share));
     const share_ext = try open(&w, 2);
     const share_list = try open(&w, 2);
     self.key_exchange.writeShare(&w, offered_key_share_group) catch |err| switch (err) {
@@ -1082,7 +1083,7 @@ fn writeClientHello(self: *Handshake, parameters: transport_parameters.Parameter
     // quic_transport_parameters, RFC 9001 section 8.2. The payload is the
     // parameters themselves, with no length of its own inside the
     // extension.
-    try writeInt(&w, u16, @intFromEnum(transport_parameters_extension));
+    try writeInt(&w, u16, @backingInt(transport_parameters_extension));
     const parameters_at = try open(&w, 2);
     transport_parameters.encode(parameters, &w) catch return error.HandshakeBufferTooSmall;
     try close(&w, parameters_at, 2);
@@ -1114,7 +1115,7 @@ fn writeServerName(self: *Handshake, w: *std.Io.Writer) Error!void {
         return;
     } else |_| {}
 
-    try writeInt(w, u16, @intFromEnum(tls.ExtensionType.server_name));
+    try writeInt(w, u16, @backingInt(tls.ExtensionType.server_name));
     const ext = try open(w, 2);
     const list = try open(w, 2);
     try writeInt(w, u8, 0); // name_type: host_name

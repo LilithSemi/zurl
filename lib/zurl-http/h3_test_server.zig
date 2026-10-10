@@ -332,8 +332,8 @@ const Tls = struct {
 
     fn init(connection_id: packet.ConnectionId, original: packet.ConnectionId) !Tls {
         var self: Tls = .{
-            .x25519 = try .generateDeterministic([_]u8{0x5a} ** 32),
-            .signer = try .generateDeterministic([_]u8{0x3c} ** 32),
+            .x25519 = .generateDeterministic(@splat(0x5a)),
+            .signer = try .generateDeterministic(@splat(0x3c)),
             .connection_id = connection_id,
             .original_connection_id = original,
         };
@@ -353,9 +353,9 @@ const Tls = struct {
             tbs.byte(0x17);
             tbs.byte(13);
             tbs.push("200101000000Z");
-            tbs.byte(0x17);
-            tbs.byte(13);
-            tbs.push("991231235959Z");
+            tbs.byte(0x18);
+            tbs.byte(15);
+            tbs.push("20991231235959Z");
             tbs.wrapDer(at, 0x30);
         }
         writeName(&tbs); // subject
@@ -424,21 +424,21 @@ const Tls = struct {
         const client_share = findKeyShare(hello) orelse return error.NoKeyShare;
 
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.server_hello));
+        out.byte(@backingInt(tls.HandshakeType.server_hello));
         const body = out.mark();
-        out.int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2));
-        out.push(&[_]u8{0x7e} ** 32);
+        out.int(u16, @backingInt(tls.ProtocolVersion.tls_1_2));
+        out.push(&@as([32]u8, @splat(0x7e)));
         out.byte(0); // legacy_session_id_echo, empty. RFC 9001 section 8.4.
-        out.int(u16, @intFromEnum(schedule.codeOf(self.suite)));
+        out.int(u16, @backingInt(schedule.codeOf(self.suite)));
         out.byte(0); // legacy_compression_method
 
         const extensions = out.mark();
-        out.int(u16, @intFromEnum(tls.ExtensionType.supported_versions));
+        out.int(u16, @backingInt(tls.ExtensionType.supported_versions));
         out.int(u16, 2);
-        out.int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_3));
-        out.int(u16, @intFromEnum(tls.ExtensionType.key_share));
+        out.int(u16, @backingInt(tls.ProtocolVersion.tls_1_3));
+        out.int(u16, @backingInt(tls.ExtensionType.key_share));
         const share = out.mark();
-        out.int(u16, @intFromEnum(tls.NamedGroup.x25519));
+        out.int(u16, @backingInt(tls.NamedGroup.x25519));
         out.int(u16, 32);
         out.push(&self.x25519.public_key);
         out.wrapLen(share, 2);
@@ -477,12 +477,12 @@ const Tls = struct {
 
     fn encryptedExtensions(self: *Tls, out: *Buf(4096)) !void {
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.encrypted_extensions));
+        out.byte(@backingInt(tls.HandshakeType.encrypted_extensions));
         const body = out.mark();
         const extensions = out.mark();
 
         // ALPN, RFC 9001 section 8.1: mandatory on a QUIC connection.
-        out.int(u16, @intFromEnum(tls.ExtensionType.application_layer_protocol_negotiation));
+        out.int(u16, @backingInt(tls.ExtensionType.application_layer_protocol_negotiation));
         const ext = out.mark();
         const list = out.mark();
         out.byte(@intCast(zurl_h3.alpn_name.len));
@@ -490,7 +490,7 @@ const Tls = struct {
         out.wrapLen(list, 2);
         out.wrapLen(ext, 2);
 
-        out.int(u16, @intFromEnum(tls.ExtensionType.quic_transport_parameters));
+        out.int(u16, @backingInt(tls.ExtensionType.quic_transport_parameters));
         const parameters = out.mark();
         var w: std.Io.Writer = .fixed(out.data[out.len..]);
         // Enough for one request stream and the three unidirectional
@@ -515,7 +515,7 @@ const Tls = struct {
 
     fn certificateMessage(self: *Tls, out: *Buf(4096)) !void {
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.certificate));
+        out.byte(@backingInt(tls.HandshakeType.certificate));
         const body = out.mark();
         out.byte(0); // certificate_request_context
         const list = out.mark();
@@ -531,7 +531,7 @@ const Tls = struct {
     fn certificateVerify(self: *Tls, out: *Buf(4096)) !void {
         const hash = self.transcript.peek();
         var content: Buf(256) = .{};
-        content.push(" " ** 64);
+        content.push(&@as([64]u8, @splat(' ')));
         content.push("TLS 1.3, server CertificateVerify");
         content.byte(0);
         content.push(hash.slice());
@@ -541,9 +541,9 @@ const Tls = struct {
         const der_sig = signature.toDer(&der_buf);
 
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.certificate_verify));
+        out.byte(@backingInt(tls.HandshakeType.certificate_verify));
         const body = out.mark();
-        out.int(u16, @intFromEnum(tls.SignatureScheme.ecdsa_secp256r1_sha256));
+        out.int(u16, @backingInt(tls.SignatureScheme.ecdsa_secp256r1_sha256));
         const sig = out.mark();
         out.push(der_sig);
         out.wrapLen(sig, 2);
@@ -555,7 +555,7 @@ const Tls = struct {
         const key = schedule.finishedKey(self.suite, &self.traffic.server);
         const data = schedule.verifyData(self.suite, &key, self.transcript.peek().slice());
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.finished));
+        out.byte(@backingInt(tls.HandshakeType.finished));
         const body = out.mark();
         out.push(data.slice());
         out.wrapLen(body, 3);
@@ -573,7 +573,7 @@ fn findKeyShare(hello: []const u8) ?[]const u8 {
         if (at + 4 + len > extensions.len) return null;
         const body = extensions[at + 4 ..][0..len];
         at += 4 + len;
-        if (kind != @intFromEnum(tls.ExtensionType.key_share)) continue;
+        if (kind != @backingInt(tls.ExtensionType.key_share)) continue;
         if (body.len < 2) return null;
         const list_len = std.mem.readInt(u16, body[0..2], .big);
         var share_at: usize = 2;
@@ -582,7 +582,7 @@ fn findKeyShare(hello: []const u8) ?[]const u8 {
             const key_len = std.mem.readInt(u16, body[share_at + 2 ..][0..2], .big);
             if (share_at + 4 + key_len > body.len) return null;
             const key = body[share_at + 4 ..][0..key_len];
-            if (group == @intFromEnum(tls.NamedGroup.x25519)) return key;
+            if (group == @backingInt(tls.NamedGroup.x25519)) return key;
             share_at += 4 + key_len;
         }
     }
@@ -593,7 +593,7 @@ fn findKeyShare(hello: []const u8) ?[]const u8 {
 /// shaped like one.
 fn extensionsOf(hello: []const u8) ?[]const u8 {
     if (hello.len < 4) return null;
-    if (hello[0] != @intFromEnum(tls.HandshakeType.client_hello)) return null;
+    if (hello[0] != @backingInt(tls.HandshakeType.client_hello)) return null;
     const body_len = (@as(usize, hello[1]) << 16) | (@as(usize, hello[2]) << 8) | hello[3];
     if (4 + body_len != hello.len) return null;
     var at: usize = 4 + 2 + 32;
@@ -898,7 +898,7 @@ fn answer(c: *Conn, slot: *Incoming, script: []const Response) !void {
         // Type `0x21` is one of the reserved types of RFC 9114 section
         // 7.2.3, so a client must ignore this frame and read the answer
         // behind it.
-        const kind: h3_frame.Kind = @enumFromInt(0x21);
+        const kind: h3_frame.Kind = @fromBackingInt(@intCast(0x21));
         try out.appendSlice(testing.allocator, h3_frame.writeHeader(kind, grease.declared, &head));
         try out.appendNTimes(testing.allocator, 0, grease.sent);
     }
@@ -1003,7 +1003,7 @@ fn openControlStreams(c: *Conn) !void {
         // RFC 9114 section 7.2.8: `0x1f * N + 0x21` is a type a peer
         // sends on purpose. The payload is a run of one byte, because
         // nothing reads it.
-        try out.appendSlice(testing.allocator, h3_frame.writeHeader(@enumFromInt(0x21), length, &head));
+        try out.appendSlice(testing.allocator, h3_frame.writeHeader(@fromBackingInt(@intCast(0x21)), length, &head));
         try out.appendNTimes(testing.allocator, 0x5a, length);
     }
     if (options.goaway) |id| {
@@ -1019,7 +1019,7 @@ fn openControlStreams(c: *Conn) !void {
     }
     if (options.grease_stream) {
         var greased: [16]u8 = undefined;
-        const written = zurl_h3.stream_type.write(@enumFromInt(0x21), &greased);
+        const written = zurl_h3.stream_type.write(@fromBackingInt(@intCast(0x21)), &greased);
         try sendStream(c, try nextUni(c), written, false);
     }
     if (options.split_grease_stream) {
@@ -1028,7 +1028,7 @@ fn openControlStreams(c: *Conn) !void {
         // datagram of its own, so the client reads the type in four
         // steps.
         var greased: [16]u8 = undefined;
-        const written = zurl_h3.stream_type.write(@enumFromInt(0x1f * 529 + 0x21), &greased);
+        const written = zurl_h3.stream_type.write(@fromBackingInt(@intCast(0x1f * 529 + 0x21)), &greased);
         std.debug.assert(written.len == 4);
         try sendStreamByteByByte(c, try nextUni(c), written);
     }

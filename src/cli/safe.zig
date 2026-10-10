@@ -220,8 +220,8 @@ test "a newline cannot draw a second line" {
 
 test "text past the bound is cut and marked" {
     var buffer: [512]u8 = undefined;
-    const long = "Q" ** 300;
-    const out = try render(&buffer, text(long));
+    const long: [300]u8 = @splat('Q');
+    const out = try render(&buffer, text(&long));
     try testing.expectEqual(default_max_len + ellipsis.len, out.len);
     try testing.expect(std.mem.endsWith(u8, out, ellipsis));
 }
@@ -230,9 +230,9 @@ test "text at the bound is whole and unmarked" {
     // The bound is checked from both sides. A printer that cut one byte
     // early, or that never cut at all, fails one of these two.
     var buffer: [512]u8 = undefined;
-    const at_bound = "Q" ** default_max_len;
-    const out = try render(&buffer, text(at_bound));
-    try testing.expectEqualStrings(at_bound, out);
+    const at_bound: [default_max_len]u8 = @splat('Q');
+    const out = try render(&buffer, text(&at_bound));
+    try testing.expectEqualStrings(&at_bound, out);
 }
 
 test "a caller may set a smaller bound" {
@@ -256,7 +256,7 @@ test "the bound counts the masked text, not the raw text" {
     // the url out of the line: the mask is three bytes whatever the
     // password was.
     var buffer: [256]u8 = undefined;
-    const long_password = "Q" ** 200;
+    const long_password: [200]u8 = @splat('Q');
     const out = try render(&buffer, text("http://a:" ++ long_password ++ "@example.com/x"));
     try testing.expectEqualStrings("http://a:***@example.com/x", out);
 }

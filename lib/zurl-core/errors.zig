@@ -399,13 +399,13 @@ comptime {
     // about forty each. The default quota of a thousand branches does not
     // cover that product.
     @setEvalBranchQuota(20_000);
-    for (@typeInfo(Error).error_set.?) |field| {
-        const err = @field(Error, field.name);
+    for (@typeInfo(Error).error_set.error_names.?) |name| {
+        const err = @field(Error, name);
         var found = false;
         for (rows) |row| {
             if (row.err == err) found = true;
         }
-        if (!found) @compileError("errors.zig: error." ++ field.name ++ " has no row in `rows`");
+        if (!found) @compileError("errors.zig: error." ++ name ++ " has no row in `rows`");
     }
 }
 
@@ -495,8 +495,8 @@ test "an unknown libcurl code maps to null" {
 }
 
 test "the map is a round trip for every error" {
-    inline for (@typeInfo(Error).error_set.?) |field| {
-        const err = @field(Error, field.name);
+    inline for (@typeInfo(Error).error_set.error_names.?) |name| {
+        const err = @field(Error, name);
         const code = curlCode(err);
         try std.testing.expectEqual(err, fromCurlCode(code).?);
     }

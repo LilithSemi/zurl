@@ -401,10 +401,10 @@ pub fn writeHeaderInto(h: Header) usize {
         @memcpy(h.out[at..][0..h.dcid.len], h.dcid.slice());
         at += h.dcid.len;
     } else {
-        const long_type: u8 = @intFromEnum(h.level.longType().?);
+        const long_type: u8 = @backingInt(h.level.longType().?);
         h.out[0] = packet.header_form_bit | packet.fixed_bit | (long_type << 4) | (@as(u8, h.pn_len) - 1);
         at = 1;
-        std.mem.writeInt(u32, h.out[at..][0..4], @intFromEnum(packet.Version.v1), .big);
+        std.mem.writeInt(u32, h.out[at..][0..4], @backingInt(packet.Version.v1), .big);
         at += 4;
         h.out[at] = h.dcid.len;
         at += 1;
@@ -944,7 +944,7 @@ pub const Connection = struct {
     /// buffer of its level, so it is retransmitted like any stream byte.
     fn drainHandshake(self: *Connection) void {
         for ([_]protection.Level{ .initial, .handshake, .application }) |level| {
-            const buffer = &(self.crypto[@intFromEnum(level)] orelse continue);
+            const buffer = &(self.crypto[@backingInt(level)] orelse continue);
             const pending = self.handshake.pendingCrypto(level);
             if (pending.len == 0) continue;
             const taken = buffer.push(pending);
@@ -1205,7 +1205,7 @@ pub const Connection = struct {
         }
 
         // The handshake bytes of this level.
-        if (self.crypto[@intFromEnum(level)]) |*buffer| {
+        if (self.crypto[@backingInt(level)]) |*buffer| {
             while (buffer.next(std.math.maxInt(u64), room)) |chunk| {
                 if (chunk.data.len == 0) break;
                 const overhead = 1 + 8 + 8;
@@ -1459,7 +1459,7 @@ pub const Connection = struct {
     fn armProbe(self: *Connection, space: loss.Space) void {
         for ([_]protection.Level{ .initial, .handshake, .application }) |level| {
             if (loss.Space.fromLevel(level) != space) continue;
-            const buffer = &(self.crypto[@intFromEnum(level)] orelse continue);
+            const buffer = &(self.crypto[@backingInt(level)] orelse continue);
             if (buffer.base < buffer.sent) buffer.onLost(buffer.base, @intCast(buffer.sent - buffer.base), false);
         }
         if (space != .application) return;
@@ -2032,7 +2032,7 @@ pub const Connection = struct {
     fn applyAcked(self: *Connection, record: *Record) void {
         for (record.frames[0..record.len]) |tracked| switch (tracked) {
             .crypto => |c| {
-                if (self.crypto[@intFromEnum(c.level)]) |*buffer| buffer.onAcked(c.offset, c.len, false);
+                if (self.crypto[@backingInt(c.level)]) |*buffer| buffer.onAcked(c.offset, c.len, false);
             },
             .stream => |s| {
                 if (self.streams.get(s.id)) |slot| self.streams.onAcked(slot, s.offset, s.len, s.fin);
@@ -2051,7 +2051,7 @@ pub const Connection = struct {
             if (!record.live or record.space != space or record.number != number) continue;
             for (record.frames[0..record.len]) |tracked| switch (tracked) {
                 .crypto => |c| {
-                    if (self.crypto[@intFromEnum(c.level)]) |*buffer| buffer.onLost(c.offset, c.len, false);
+                    if (self.crypto[@backingInt(c.level)]) |*buffer| buffer.onLost(c.offset, c.len, false);
                 },
                 .stream => |s| {
                     if (self.streams.get(s.id)) |slot| self.streams.onLost(slot, s.offset, s.len, s.fin);
@@ -2386,7 +2386,7 @@ test "an Initial packet this file builds is one a server can read back" {
 
 test "a short header packet is read back with the key phase the sender set" {
     const dcid: packet.ConnectionId = try .init(&.{ 0xaa, 0xbb, 0xcc, 0xdd });
-    const secret = [_]u8{0x2b} ** 32;
+    const secret: [32]u8 = @splat(0x2b);
     const keys: protection.Keys = .fromSecret(.aes_128_gcm, &secret);
 
     for ([_]u1{ 0, 1 }) |phase| {

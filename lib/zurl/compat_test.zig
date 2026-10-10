@@ -325,7 +325,7 @@ test "a close-delimited https body that ends with no close_notify is not a whole
     // stops at the framed end, so it never reaches the missing alert.
     // Without them the fix would look like it refuses every server that
     // closes without saying so, which is common and which curl tolerates.
-    const payload = "0123456789" ** 10;
+    const payload: [100]u8 = @bitCast(@as([10][10]u8, @splat("0123456789".*)));
     const Case = struct {
         name: []const u8,
         response: []const u8,
@@ -417,7 +417,7 @@ test "a close-delimited https body that ends with no close_notify is not a whole
             .limited(1024),
         );
         defer testing.allocator.free(contents);
-        try testing.expectEqualStrings(payload, contents);
+        try testing.expectEqualStrings(&payload, contents);
     }
 }
 

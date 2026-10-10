@@ -833,18 +833,10 @@ fn addVendorCheck(b: *std.Build, test_step: *std.Build.Step) void {
     const exe = b.addExecutable(.{ .name = "check-vendor", .root_module = tool });
     const run = b.addRunArtifact(exe);
 
-    const lib_dir = b.graph.zig_lib_directory.path orelse {
-        // The build runner knows where the standard library is, so this is a
-        // Zig that was built to carry it somewhere this step cannot name. The
-        // step fails with that reason rather than passing on no comparison.
-        const fail = b.addFail(
-            "check-vendor: this Zig gives no library directory, so the upstream file cannot be found",
-        );
-        step.dependOn(&fail.step);
-        test_step.dependOn(&fail.step);
-        return;
-    };
-    run.addArg(b.pathJoin(&.{ lib_dir, vendored_upstream }));
+    // `LazyPath.zig_lib` names the library directory of whichever Zig runs
+    // the build, so the upstream file is found without a path written down
+    // anywhere.
+    run.addFileArg(.{ .relative = .{ .base = .zig_lib, .sub_path = vendored_upstream } });
     run.addFileArg(b.path(vendored_copy));
 
     step.dependOn(&run.step);
@@ -920,11 +912,15 @@ fn addCli(
     b.getInstallStep().dependOn(&install_cli.step);
 
     // The binary's own tests spawn it as a subprocess, so they need its
-    // installed path. `getInstallPath` is known at configure time; a
-    // build option bakes it into the test binary, and never into `cli`
-    // itself.
+    // path. `addOptionPath` takes the emitted binary rather than an install
+    // path, so the tests depend on the build and not on `zig build install`
+    // having run first.
+    //
+    // The path is relative to the build root, so a test that gives the
+    // child a working directory of its own names the binary with
+    // `SpawnOptions.exe` instead of with `argv[0]`.
     const cli_test_options = b.addOptions();
-    cli_test_options.addOption([]const u8, "exe_path", b.getInstallPath(.bin, "zurl"));
+    cli_test_options.addOptionPath("exe_path", cli.getEmittedBin());
 
     const cli_test_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),

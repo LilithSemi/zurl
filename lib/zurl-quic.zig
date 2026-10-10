@@ -149,7 +149,7 @@ test {
 }
 
 test "the package names QUIC version 1 and the two bounds under everything" {
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(packet.Version.v1));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(packet.Version.v1));
     try std.testing.expectEqual(@as(u64, (1 << 62) - 1), varint.max_value);
     try std.testing.expectEqual(@as(usize, 20), packet.max_connection_id_len);
 }

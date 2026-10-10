@@ -627,7 +627,7 @@ test "a decode never writes more than eight fifths of what it reads" {
     // "0" is the shortest code in the table at five bits, and it is five
     // zero bits, so a run of zero octets is the widest expansion this code
     // allows. 100 octets carry 800 bits, which is 160 symbols exactly.
-    const dense = [_]u8{0x00} ** 100;
+    const dense: [100]u8 = @splat(0x00);
     const back = try decode(testing.allocator, &dense, 1024);
     defer testing.allocator.free(back);
 

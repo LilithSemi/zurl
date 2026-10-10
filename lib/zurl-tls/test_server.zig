@@ -704,7 +704,7 @@ const Conn = struct {
         body: []u8,
 
         fn contentType(self: *const Record) tls.ContentType {
-            return @enumFromInt(self.header[0]);
+            return @fromBackingInt(@intCast(self.header[0]));
         }
     };
 
@@ -744,14 +744,14 @@ const Conn = struct {
         const end = std.mem.trimEnd(u8, plain, "\x00");
         if (end.len == 0) return error.TlsUnexpectedMessage;
         return .{
-            .ct = @enumFromInt(end[end.len - 1]),
+            .ct = @fromBackingInt(@intCast(end[end.len - 1])),
             .body = plain[0 .. end.len - 1],
         };
     }
 
     /// Writes one cleartext record.
     fn writePlain(c: *Conn, ct: tls.ContentType, payload: []const u8) !void {
-        var header: [tls.record_header_len]u8 = .{ @intFromEnum(ct), 0x03, 0x03, 0, 0 };
+        var header: [tls.record_header_len]u8 = .{ @backingInt(ct), 0x03, 0x03, 0, 0 };
         std.mem.writeInt(u16, header[3..5], @intCast(payload.len), .big);
         try c.out.writeAll(&header);
         try c.out.writeAll(payload);
@@ -771,7 +771,7 @@ const Conn = struct {
             const inner_len = take + 1;
 
             var header: [tls.record_header_len]u8 = .{
-                @intFromEnum(tls.ContentType.application_data),
+                @backingInt(tls.ContentType.application_data),
                 0x03,
                 0x03,
                 0,
@@ -781,7 +781,7 @@ const Conn = struct {
 
             var inner: [write_plaintext_max + 1]u8 = undefined;
             @memcpy(inner[0..take], payload[from..][0..take]);
-            inner[take] = @intFromEnum(ct);
+            inner[take] = @backingInt(ct);
 
             Aead.encrypt(
                 record[0..inner_len],
@@ -814,7 +814,7 @@ const Conn = struct {
         var record: [write_plaintext_max + Aead.tag_length]u8 = undefined;
 
         var header: [tls.record_header_len]u8 = .{
-            @intFromEnum(tls.ContentType.application_data),
+            @backingInt(tls.ContentType.application_data),
             0x03,
             0x03,
             0,
@@ -860,7 +860,7 @@ fn handshake(c: *Conn) !void {
     const hello = try c.readRecord();
     if (hello.contentType() != .handshake) return error.TlsUnexpectedMessage;
     if (hello.body.len < 4) return error.TlsDecodeError;
-    if (hello.body[0] != @intFromEnum(tls.HandshakeType.client_hello)) {
+    if (hello.body[0] != @backingInt(tls.HandshakeType.client_hello)) {
         return error.TlsUnexpectedMessage;
     }
 
@@ -876,7 +876,7 @@ fn handshake(c: *Conn) !void {
 
     // The key exchange. The secret key is derived from the session so that
     // a run leaves no shared state behind, and it never leaves this task.
-    const x25519 = try crypto.dh.X25519.KeyPair.generateDeterministic([_]u8{0x5a} ** 32);
+    const x25519 = crypto.dh.X25519.KeyPair.generateDeterministic(@splat(0x5a));
 
     var server_hello: Buf(512) = .{};
     writeServerHello(&server_hello, session_id, x25519.public_key);
@@ -886,7 +886,7 @@ fn handshake(c: *Conn) !void {
     // RFC 8446 appendix D.4. The client waits for this record before it
     // reads an encrypted one, and the vendored client is no exception.
     try c.writePlain(.change_cipher_spec, &[_]u8{
-        @intFromEnum(tls.ChangeCipherSpecType.change_cipher_spec),
+        @backingInt(tls.ChangeCipherSpecType.change_cipher_spec),
     });
 
     const shared = try crypto.dh.X25519.scalarmult(
@@ -922,26 +922,26 @@ fn writeServerHello(
     session_id: []const u8,
     share: [crypto.dh.X25519.public_length]u8,
 ) void {
-    out.byte(@intFromEnum(tls.HandshakeType.server_hello));
+    out.byte(@backingInt(tls.HandshakeType.server_hello));
     const body = out.mark();
-    out.int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_2));
+    out.int(u16, @backingInt(tls.ProtocolVersion.tls_1_2));
     // The server random. It must not be the HelloRetryRequest sentinel of
     // RFC 8446 section 4.1.3, and this is not it.
-    out.push(&[_]u8{0x7e} ** 32);
+    out.push(&@as([32]u8, @splat(0x7e)));
     // The echo of the client's legacy session id. RFC 8446 section 4.1.3
     // asks for the exact octets back, and the client checks them.
     out.byte(@intCast(session_id.len));
     out.push(session_id);
-    out.int(u16, @intFromEnum(tls.CipherSuite.AES_128_GCM_SHA256));
+    out.int(u16, @backingInt(tls.CipherSuite.AES_128_GCM_SHA256));
     out.byte(0); // legacy_compression_method
 
     const extensions = out.mark();
-    out.int(u16, @intFromEnum(tls.ExtensionType.supported_versions));
+    out.int(u16, @backingInt(tls.ExtensionType.supported_versions));
     out.int(u16, 2);
-    out.int(u16, @intFromEnum(tls.ProtocolVersion.tls_1_3));
-    out.int(u16, @intFromEnum(tls.ExtensionType.key_share));
+    out.int(u16, @backingInt(tls.ProtocolVersion.tls_1_3));
+    out.int(u16, @backingInt(tls.ExtensionType.key_share));
     const entry = out.mark();
-    out.int(u16, @intFromEnum(tls.NamedGroup.x25519));
+    out.int(u16, @backingInt(tls.NamedGroup.x25519));
     out.int(u16, share.len);
     out.push(&share);
     out.wrapLen(entry, 2);
@@ -953,11 +953,11 @@ fn writeServerHello(
 /// Finished, which is the whole of the server's flight.
 fn writeFlight(c: *Conn, out: *Buf(8192)) !void {
     {
-        out.byte(@intFromEnum(tls.HandshakeType.encrypted_extensions));
+        out.byte(@backingInt(tls.HandshakeType.encrypted_extensions));
         const body = out.mark();
         const extensions = out.mark();
         if (c.alpn.len != 0) {
-            out.int(u16, @intFromEnum(tls.ExtensionType.application_layer_protocol_negotiation));
+            out.int(u16, @backingInt(tls.ExtensionType.application_layer_protocol_negotiation));
             const ext = out.mark();
             const list = out.mark();
             out.byte(@intCast(c.alpn.len));
@@ -969,7 +969,7 @@ fn writeFlight(c: *Conn, out: *Buf(8192)) !void {
         out.wrapLen(body, 3);
     }
     {
-        out.byte(@intFromEnum(tls.HandshakeType.certificate));
+        out.byte(@backingInt(tls.HandshakeType.certificate));
         const body = out.mark();
         out.byte(0); // certificate_request_context
         const list = out.mark();
@@ -988,7 +988,7 @@ fn writeFlight(c: *Conn, out: *Buf(8192)) !void {
         // 4.4.3 and the transcript through the Certificate message.
         const hash = c.transcript.peek();
         var content: Buf(256) = .{};
-        content.push(" " ** 64);
+        content.push(&@as([64]u8, @splat(' ')));
         content.push("TLS 1.3, server CertificateVerify");
         content.byte(0);
         content.push(&hash);
@@ -998,9 +998,9 @@ fn writeFlight(c: *Conn, out: *Buf(8192)) !void {
         const der = signature.toDer(&der_buf);
 
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.certificate_verify));
+        out.byte(@backingInt(tls.HandshakeType.certificate_verify));
         const body = out.mark();
-        out.int(u16, @intFromEnum(tls.SignatureScheme.ecdsa_secp256r1_sha256));
+        out.int(u16, @backingInt(tls.SignatureScheme.ecdsa_secp256r1_sha256));
         const sig = out.mark();
         out.push(der);
         out.wrapLen(sig, 2);
@@ -1011,7 +1011,7 @@ fn writeFlight(c: *Conn, out: *Buf(8192)) !void {
         const digest = c.transcript.peek();
         const verify = tls.hmac(Hmac, &digest, c.server_finished_key);
         const at = out.mark();
-        out.byte(@intFromEnum(tls.HandshakeType.finished));
+        out.byte(@backingInt(tls.HandshakeType.finished));
         const body = out.mark();
         out.push(&verify);
         out.wrapLen(body, 3);
@@ -1030,14 +1030,14 @@ fn readClientFinished(c: *Conn) !void {
     while (true) {
         // The client sends its own change_cipher_spec first, in cleartext.
         const peeked = try c.in.peek(tls.record_header_len);
-        if (peeked[0] == @intFromEnum(tls.ContentType.change_cipher_spec)) {
+        if (peeked[0] == @backingInt(tls.ContentType.change_cipher_spec)) {
             _ = try c.readRecord();
             continue;
         }
         const message = try c.readSealed();
         if (message.ct != .handshake) return error.TlsUnexpectedMessage;
         if (message.body.len != 4 + Hmac.mac_length) return error.TlsDecodeError;
-        if (message.body[0] != @intFromEnum(tls.HandshakeType.finished)) {
+        if (message.body[0] != @backingInt(tls.HandshakeType.finished)) {
             return error.TlsUnexpectedMessage;
         }
         const got: [Hmac.mac_length]u8 = message.body[4..][0..Hmac.mac_length].*;
@@ -1110,7 +1110,7 @@ fn sessionIdOf(hello: []const u8) ?[]const u8 {
 /// shaped like one.
 fn extensionsOf(hello: []const u8) ?[]const u8 {
     if (hello.len < 4) return null;
-    if (hello[0] != @intFromEnum(tls.HandshakeType.client_hello)) return null;
+    if (hello[0] != @backingInt(tls.HandshakeType.client_hello)) return null;
     const body_len = (@as(usize, hello[1]) << 16) | (@as(usize, hello[2]) << 8) | hello[3];
     if (4 + body_len != hello.len) return null;
     var at: usize = 4 + 2 + 32;
@@ -1138,7 +1138,7 @@ fn extensionOf(hello: []const u8, wanted: tls.ExtensionType) ?[]const u8 {
         if (at + 4 + len > extensions.len) return null;
         const body = extensions[at + 4 ..][0..len];
         at += 4 + len;
-        if (kind == @intFromEnum(wanted)) return body;
+        if (kind == @backingInt(wanted)) return body;
     }
     return null;
 }
@@ -1155,7 +1155,7 @@ fn keyShareOf(hello: []const u8) ?[]const u8 {
         const key_len = std.mem.readInt(u16, body[at + 2 ..][0..2], .big);
         if (at + 4 + key_len > 2 + list_len) return null;
         const key = body[at + 4 ..][0..key_len];
-        if (group == @intFromEnum(tls.NamedGroup.x25519)) return key;
+        if (group == @backingInt(tls.NamedGroup.x25519)) return key;
         at += 4 + key_len;
     }
     return null;
@@ -1275,7 +1275,7 @@ fn sendFault(c: *Conn) !void {
         .short_record => try c.writeRaw(&[_]u8{ 0x17, 0x03, 0x03, 0x00, 0x00 }),
         // A plaintext that is padding and nothing else. RFC 8446 section
         // 5.4 makes it legal to send and illegal to accept.
-        .zero_inner_plaintext => try c.writeSealedExact(&[_]u8{0} ** 4),
+        .zero_inner_plaintext => try c.writeSealedExact(&@as([4]u8, @splat(0))),
         // A handshake sub-message header cut short. The trailing octet is
         // the inner content type, so the message is the two octets in
         // front of it and the four octet header is not all there.

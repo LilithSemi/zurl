@@ -527,7 +527,7 @@ pub fn open(c: *Channel) Error!void {
     while (true) {
         const payload = try c.transport.receive();
         const id = messages.idOf(payload) orelse return error.WrongMessage;
-        switch (@as(connection.Id, @enumFromInt(@intFromEnum(id)))) {
+        switch (@as(connection.Id, @fromBackingInt(@intCast(@backingInt(id))))) {
             .channel_open_confirmation => {
                 const confirmed = try connection.parseOpenConfirmation(payload);
                 if (confirmed.recipient_channel != local_channel) {
@@ -650,7 +650,7 @@ fn awaitRequestReply(c: *Channel) Error!void {
     while (true) {
         const payload = try c.transport.receive();
         const id = messages.idOf(payload) orelse return error.WrongMessage;
-        switch (@as(connection.Id, @enumFromInt(@intFromEnum(id)))) {
+        switch (@as(connection.Id, @fromBackingInt(@intCast(@backingInt(id))))) {
             .channel_success => {
                 if (try connection.recipientChannelOf(payload) != local_channel) {
                     return error.ChannelUnknown;
@@ -794,7 +794,7 @@ fn step(c: *Channel) Error!void {
 
 fn apply(c: *Channel, payload: []const u8) Error!void {
     const id = messages.idOf(payload) orelse return error.WrongMessage;
-    const channel_id: connection.Id = @enumFromInt(@intFromEnum(id));
+    const channel_id: connection.Id = @fromBackingInt(@intCast(@backingInt(id)));
 
     // **A packet that moves nothing a caller asked for is counted, and
     // the count never goes back down.** See `max_idle_steps`. The arms
@@ -1043,8 +1043,8 @@ fn handleOther(c: *Channel, payload: []const u8) Error!void {
     // A channel message before the channel is open belongs to no channel,
     // and `apply` would take it for one this side holds. Only the
     // connection layer's own housekeeping is answered here.
-    if (!c.opened and connection.isConnectionMessage(@intFromEnum(id))) {
-        switch (@as(connection.Id, @enumFromInt(@intFromEnum(id)))) {
+    if (!c.opened and connection.isConnectionMessage(@backingInt(id))) {
+        switch (@as(connection.Id, @fromBackingInt(@intCast(@backingInt(id))))) {
             .global_request, .channel_open => return c.apply(payload),
             else => return error.ChannelStateInvalid,
         }
@@ -1201,9 +1201,9 @@ test "extended data goes to the stderr sink and never to the body" {
 
     var storage: [64]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(connection.Id.channel_extended_data));
+    try w.byte(@backingInt(connection.Id.channel_extended_data));
     try w.uint32(local_channel);
-    try w.uint32(@intFromEnum(connection.ExtendedDataType.stderr));
+    try w.uint32(@backingInt(connection.ExtendedDataType.stderr));
     try w.string("scp: no such file");
     try c.apply(w.written());
 
@@ -1226,7 +1226,7 @@ test "an extended data type this build does not know is counted and dropped" {
 
     var storage: [64]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(connection.Id.channel_extended_data));
+    try w.byte(@backingInt(connection.Id.channel_extended_data));
     try w.uint32(local_channel);
     try w.uint32(9);
     try w.string("who knows");
@@ -1249,7 +1249,7 @@ test "an exit status is kept, and a channel with none says so" {
 
     var storage: [64]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(connection.Id.channel_request));
+    try w.byte(@backingInt(connection.Id.channel_request));
     try w.uint32(local_channel);
     try w.string("exit-status");
     try w.boolean(false);
@@ -1268,7 +1268,7 @@ test "an exit signal is kept beside the status and does not become one" {
 
     var storage: [128]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(connection.Id.channel_request));
+    try w.byte(@backingInt(connection.Id.channel_request));
     try w.uint32(local_channel);
     try w.string("exit-signal");
     try w.boolean(false);
@@ -1295,7 +1295,7 @@ test "a channel request this build does not act on is counted and dropped" {
 
     var storage: [64]u8 = undefined;
     var w: wire.Writer = .init(&storage);
-    try w.byte(@intFromEnum(connection.Id.channel_request));
+    try w.byte(@backingInt(connection.Id.channel_request));
     try w.uint32(local_channel);
     try w.string("keepalive@openssh.com");
     try w.boolean(false);

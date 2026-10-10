@@ -32,7 +32,7 @@ pub const Type = enum(u64) {
             .push => "push",
             .qpack_encoder => "QPACK encoder",
             .qpack_decoder => "QPACK decoder",
-            _ => if (isReserved(@intFromEnum(self))) "reserved" else "UNKNOWN",
+            _ => if (isReserved(@backingInt(self))) "reserved" else "UNKNOWN",
         };
     }
 
@@ -72,19 +72,19 @@ pub const Read = struct {
 /// eight byte reserved type can arrive in eight datagrams.
 pub fn read(bytes: []const u8) ?Read {
     const field = varint.decode(bytes) catch return null;
-    return .{ .type = @enumFromInt(field.value), .len = field.len };
+    return .{ .type = @fromBackingInt(@intCast(field.value)), .len = field.len };
 }
 
 /// How many bytes `write` writes for `t`.
 pub fn writtenLen(t: Type) usize {
-    return varint.encodedLen(@intFromEnum(t)) catch unreachable;
+    return varint.encodedLen(@backingInt(t)) catch unreachable;
 }
 
 /// Writes the type onto the front of a unidirectional stream.
 pub fn write(t: Type, out: []u8) []u8 {
     std.debug.assert(out.len >= writtenLen(t));
     var scratch: [varint.max_bytes]u8 = undefined;
-    const bytes = varint.encode(&scratch, @intFromEnum(t)) catch unreachable;
+    const bytes = varint.encode(&scratch, @backingInt(t)) catch unreachable;
     @memcpy(out[0..bytes.len], bytes);
     return out[0..bytes.len];
 }
@@ -92,10 +92,10 @@ pub fn write(t: Type, out: []u8) []u8 {
 const testing = std.testing;
 
 test "the four types RFC 9114 and RFC 9204 name have the numbers they give" {
-    try testing.expectEqual(@as(u64, 0x00), @intFromEnum(Type.control));
-    try testing.expectEqual(@as(u64, 0x01), @intFromEnum(Type.push));
-    try testing.expectEqual(@as(u64, 0x02), @intFromEnum(Type.qpack_encoder));
-    try testing.expectEqual(@as(u64, 0x03), @intFromEnum(Type.qpack_decoder));
+    try testing.expectEqual(@as(u64, 0x00), @backingInt(Type.control));
+    try testing.expectEqual(@as(u64, 0x01), @backingInt(Type.push));
+    try testing.expectEqual(@as(u64, 0x02), @backingInt(Type.qpack_encoder));
+    try testing.expectEqual(@as(u64, 0x03), @backingInt(Type.qpack_decoder));
 }
 
 test "a type round trips and each of the four takes one byte" {
@@ -114,7 +114,7 @@ test "a part of a type is a wait and not a fault" {
     // A reserved type wide enough to need four bytes, arriving one byte
     // at a time.
     var out: [max_bytes]u8 = undefined;
-    const written = write(@enumFromInt(0x1f * 100 + 0x21), &out);
+    const written = write(@fromBackingInt(@intCast(0x1f * 100 + 0x21)), &out);
     try testing.expect(written.len > 1);
     var at: usize = 0;
     while (at < written.len) : (at += 1) {
@@ -126,11 +126,11 @@ test "a part of a type is a wait and not a fault" {
 test "a reserved type is one this build abandons rather than reads" {
     for ([_]u64{ 0x21, 0x40, 0x5f }) |value| {
         try testing.expect(isReserved(value));
-        const t: Type = @enumFromInt(value);
+        const t: Type = @fromBackingInt(@intCast(value));
         try testing.expect(!t.isKnown());
         try testing.expectEqualStrings("reserved", t.name());
     }
-    const unknown: Type = @enumFromInt(0x22);
+    const unknown: Type = @fromBackingInt(@intCast(0x22));
     try testing.expect(!unknown.isKnown());
     try testing.expectEqualStrings("UNKNOWN", unknown.name());
 }

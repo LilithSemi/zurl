@@ -176,7 +176,7 @@ pub fn deriveKey(
     var first: Sha256 = .init(.{});
     hashMpint(&first, shared_secret);
     first.update(&h);
-    first.update(&[_]u8{@intFromEnum(purpose)});
+    first.update(&[_]u8{@backingInt(purpose)});
     first.update(session_id);
     first.final(&block);
 
@@ -221,7 +221,7 @@ pub fn sharedSecret(
 /// Builds a `SSH_MSG_KEX_ECDH_INIT` into `out`.
 pub fn writeEcdhInit(out: []u8, client_public: [public_bytes]u8) wire.WriteError![]u8 {
     var w: wire.Writer = .init(out);
-    try w.byte(@intFromEnum(messages.Id.kex_ecdh_init));
+    try w.byte(@backingInt(messages.Id.kex_ecdh_init));
     try w.string(&client_public);
     return w.written();
 }
@@ -252,7 +252,7 @@ pub const EcdhReply = struct {
 /// Reads a `SSH_MSG_KEX_ECDH_REPLY`.
 pub fn parseEcdhReply(payload: []const u8) ParseError!EcdhReply {
     var r: wire.Reader = .init(payload);
-    if (try r.byte() != @intFromEnum(messages.Id.kex_ecdh_reply)) return error.WrongMessage;
+    if (try r.byte() != @backingInt(messages.Id.kex_ecdh_reply)) return error.WrongMessage;
     const host_key_blob = try r.string();
     const server_public = try r.string();
     const signature_blob = try r.string();
@@ -281,7 +281,7 @@ test "the exchange hash is the eight fields, in order, and nothing else" {
         .client_public = "Q_C thirty two bytes long here!!",
         .server_public = "Q_S thirty two bytes long here!!",
         // The top bit is set, so the mpint gains a leading zero byte.
-        .shared_secret = &[_]u8{0x80} ** 32,
+        .shared_secret = &@as([32]u8, @splat(0x80)),
     };
 
     var buffer: std.ArrayList(u8) = .empty;
@@ -330,9 +330,9 @@ test "every field changes the exchange hash" {
     };
     const original = exchangeHash(base);
 
-    inline for (@typeInfo(ExchangeHashInputs).@"struct".fields) |field| {
+    inline for (@typeInfo(ExchangeHashInputs).@"struct".field_names) |field_name| {
         var changed = base;
-        @field(changed, field.name) = "changed";
+        @field(changed, field_name) = "changed";
         try testing.expect(!std.mem.eql(u8, &original, &exchangeHash(changed)));
     }
 
@@ -356,7 +356,7 @@ test "the shared secret goes in as an mpint and never as a string" {
         .host_key_blob = "k",
         .client_public = "q",
         .server_public = "q",
-        .shared_secret = &[_]u8{0xff} ** 32,
+        .shared_secret = &@as([32]u8, @splat(0xff)),
     };
     var as_string: [4 + 32]u8 = undefined;
     std.mem.writeInt(u32, as_string[0..4], 32, .big);
@@ -379,16 +379,16 @@ test "the shared secret goes in as an mpint and never as a string" {
     // And a secret with a leading zero byte hashes the same as the same
     // number without it, because an mpint carries no leading zero.
     var trimmed = high;
-    trimmed.shared_secret = &([_]u8{0} ** 3 ++ [_]u8{0x7f} ** 29);
+    trimmed.shared_secret = &(@as([3]u8, @splat(0)) ++ @as([29]u8, @splat(0x7f)));
     var untrimmed = high;
-    untrimmed.shared_secret = &[_]u8{0x7f} ** 29;
+    untrimmed.shared_secret = &@as([29]u8, @splat(0x7f));
     try testing.expectEqualSlices(u8, &exchangeHash(trimmed), &exchangeHash(untrimmed));
 }
 
 test "the derived keys differ by purpose and fill a run longer than one hash" {
-    const secret = [_]u8{0x11} ** 32;
-    const h = [_]u8{0x22} ** hash_bytes;
-    const session_id = [_]u8{0x33} ** hash_bytes;
+    const secret: [32]u8 = @splat(0x11);
+    const h: [hash_bytes]u8 = @splat(0x22);
+    const session_id: [hash_bytes]u8 = @splat(0x33);
 
     var seen: [6][64]u8 = undefined;
     const purposes = [_]KeyPurpose{
@@ -428,8 +428,8 @@ test "the derived keys differ by purpose and fill a run longer than one hash" {
 }
 
 test "a key run shorter than one hash takes the front of it" {
-    const secret = [_]u8{0x44} ** 32;
-    const h = [_]u8{0x55} ** hash_bytes;
+    const secret: [32]u8 = @splat(0x44);
+    const h: [hash_bytes]u8 = @splat(0x55);
     var twelve: [12]u8 = undefined;
     var full: [32]u8 = undefined;
     deriveKey(&twelve, &secret, h, .initial_iv_server_to_client, &h);
@@ -446,10 +446,10 @@ test "a key run shorter than one hash takes the front of it" {
 test "a rekey keeps the first session id and takes the new exchange hash" {
     // The session id is the argument, so this proves the shape rather
     // than the transport's use of it. The transport test proves the use.
-    const secret = [_]u8{0x66} ** 32;
-    const session_id = [_]u8{0x77} ** hash_bytes;
+    const secret: [32]u8 = @splat(0x66);
+    const session_id: [hash_bytes]u8 = @splat(0x77);
     const first_h = session_id;
-    const second_h = [_]u8{0x88} ** hash_bytes;
+    const second_h: [hash_bytes]u8 = @splat(0x88);
 
     var before: [32]u8 = undefined;
     var after: [32]u8 = undefined;
@@ -459,11 +459,11 @@ test "a rekey keeps the first session id and takes the new exchange hash" {
 }
 
 test "the shared secret refuses a public value of the wrong size" {
-    const secret = [_]u8{0x99} ** 32;
+    const secret: [32]u8 = @splat(0x99);
     try testing.expectError(error.ServerPublicKeyMalformed, sharedSecret(secret, ""));
     try testing.expectError(
         error.ServerPublicKeyMalformed,
-        sharedSecret(secret, &[_]u8{0} ** 31),
+        sharedSecret(secret, &@as([31]u8, @splat(0))),
     );
 }
 
@@ -471,10 +471,10 @@ test "an all zero shared secret is refused, as RFC 8731 section 3 asks" {
     // **A point of small order gives every client the same secret.** The
     // all-zero public value is one, and a client that carried on would
     // agree a key with anybody who sent it.
-    const secret = [_]u8{0x9a} ** 32;
+    const secret: [32]u8 = @splat(0x9a);
     try testing.expectError(
         error.ServerPublicKeyWeak,
-        sharedSecret(secret, &[_]u8{0} ** 32),
+        sharedSecret(secret, &@as([32]u8, @splat(0))),
     );
     // The order two point is another.
     var order_two: [32]u8 = @splat(0);
@@ -487,8 +487,8 @@ test "two X25519 sides reach the same secret" {
     @memset(&client_seed, 0xa1);
     var server_seed: [32]u8 = undefined;
     @memset(&server_seed, 0xb2);
-    const client = try X25519.KeyPair.generateDeterministic(client_seed);
-    const server = try X25519.KeyPair.generateDeterministic(server_seed);
+    const client = X25519.KeyPair.generateDeterministic(client_seed);
+    const server = X25519.KeyPair.generateDeterministic(server_seed);
 
     const from_client = try sharedSecret(client.secret_key, &server.public_key);
     const from_server = try sharedSecret(server.secret_key, &client.public_key);

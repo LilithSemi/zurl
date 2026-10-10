@@ -1164,7 +1164,7 @@ test "a pattern takes a wildcard and a negation" {
 
     // A pattern of nothing but stars is bounded, so a line cannot buy
     // itself unbounded work.
-    const many = "*" ** (max_wildcards + 1);
+    const many = &@as([max_wildcards + 1]u8, @splat('*'));
     try testing.expect(!matchPattern(many, "anything"));
 }
 
