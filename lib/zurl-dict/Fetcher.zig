@@ -936,9 +936,12 @@ test "--connect-to moves a dict dial and --resolve reaches this package too" {
     var fetcher: Fetcher = .init(testing.allocator, testing.io);
     defer fetcher.deinit();
     // **The url names a peer that is not the server, and no test here
-    // touches a resolver.** `127.0.0.2:1` refuses at once, so the flag is
-    // the only thing that can reach the server below.
-    const url = try parseDictUrl("dict://127.0.0.2:1/d:hello");
+    // touches a resolver.** `127.0.0.1:1` refuses at once, so the flag is
+    // the only thing that can reach the server below. Port 1 is the dead
+    // half: a second loopback address would say the same thing, and
+    // Darwin carries 127.0.0.1 alone, where a dial to any other address
+    // of 127.0.0.0/8 is dropped rather than refused.
+    const url = try parseDictUrl("dict://127.0.0.1:1/d:hello");
 
     // Without an entry the dial goes where the url says and is refused.
     var bare: Diagnostics = .{};
@@ -947,7 +950,7 @@ test "--connect-to moves a dict dial and --resolve reaches this package too" {
 
     // With one the dial lands on the loopback server.
     const overrides: []const zurl_net.override.HostOverride = &.{.{
-        .from_host = "127.0.0.2",
+        .from_host = "127.0.0.1",
         .from_port = 1,
         .to_host = "127.0.0.1",
         .to_port = server.port(),

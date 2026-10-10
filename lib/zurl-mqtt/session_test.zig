@@ -393,8 +393,18 @@ test "a broker that closes after the connect is a fault and not an empty answer"
     // is the transfer ending because the broker went away, and pinning one
     // of the two would be a test that fails on a loaded machine.
     var d: zurl_core.Diagnostics = .{};
-    const err = f.open(url, .{}, &d);
-    try testing.expect(err == error.WeirdServerReply or err == error.WriteError);
+    if (f.open(url, .{}, &d)) |_| {
+        return error.TestExpectedBrokerFault;
+    } else |fault| switch (fault) {
+        error.WeirdServerReply, error.WriteError => {},
+        // A third name here is a system that ends a closed connection
+        // its own way, and the name is what says which one. Reading it
+        // from the failure beats reading "failed" and guessing.
+        else => {
+            std.debug.print("the broker's close read as {t}\n", .{fault});
+            return error.TestUnexpectedResult;
+        },
+    }
     try testing.expect(d.message != null);
 }
 
@@ -635,9 +645,12 @@ test "--connect-to moves an mqtt dial and --resolve reaches this package too" {
     // diagnostic. curl 8.21.0 applies both to `mqtt` and `mqtts`,
     // measured.
     //
-    // **No test here touches a resolver.** The url names `127.0.0.2:1`,
+    // **No test here touches a resolver.** The url names `127.0.0.1:1`,
     // which refuses at once, so the flag is the only thing that can reach
-    // the broker.
+    // the broker. Port 1 is the dead half and the broker's own port is
+    // the live one: a second loopback address would say the same thing,
+    // and Darwin carries 127.0.0.1 alone, where a dial to any other
+    // address of 127.0.0.0/8 is dropped rather than refused.
     var server: test_server.Server = undefined;
     try server.start(.{});
     defer server.stop();
@@ -645,7 +658,7 @@ test "--connect-to moves an mqtt dial and --resolve reaches this package too" {
     const f = try Fetcher.create(testing.allocator, testing.io);
     defer f.destroy();
 
-    const url = try Fetcher.parseMqttUrl("mqtt://127.0.0.2:1/zurl/test");
+    const url = try Fetcher.parseMqttUrl("mqtt://127.0.0.1:1/zurl/test");
 
     var first: Payload = .{ .bytes = "hello world" };
     var bare: zurl_core.Diagnostics = .{};
@@ -659,7 +672,7 @@ test "--connect-to moves an mqtt dial and --resolve reaches this package too" {
     const body = try f.open(url, .{
         .payload = second.source(),
         .connect_to = &.{.{
-            .from_host = "127.0.0.2",
+            .from_host = "127.0.0.1",
             .from_port = 1,
             .to_host = "127.0.0.1",
             .to_port = server.port(),

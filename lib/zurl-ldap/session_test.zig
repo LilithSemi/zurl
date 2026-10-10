@@ -989,21 +989,24 @@ test "--connect-to moves an ldap dial and --resolve reaches this package too" {
     // user who named either flag got a dial to the url's own host and no
     // diagnostic.
     //
-    // **No test here touches a resolver.** The url names `127.0.0.2:1`,
+    // **No test here touches a resolver.** The url names `127.0.0.1:1`,
     // which refuses at once, so the flag is the only thing that can reach
-    // the fixture.
+    // the fixture. Port 1 is the dead half and the fixture's own port is
+    // the live one: a second loopback address would say the same thing,
+    // and Darwin carries 127.0.0.1 alone, where a dial to any other
+    // address of 127.0.0.0/8 is dropped rather than refused.
     var fx: Fixture = undefined;
     try fx.start(.{ .entries = &.{root_entry} });
     defer fx.stop();
 
-    const url = try Fetcher.parseLdapUrl("ldap://127.0.0.2:1/dc=zurl,dc=test");
+    const url = try Fetcher.parseLdapUrl("ldap://127.0.0.1:1/dc=zurl,dc=test");
 
     var bare: Diagnostics = .{};
     try testing.expectError(error.CouldNotConnect, fx.fetcher.open(url, .{}, &bare));
     try testing.expectEqual(@as(usize, 0), fx.server.connections());
 
     const body = try fx.fetcher.open(url, .{ .connect_to = &.{.{
-        .from_host = "127.0.0.2",
+        .from_host = "127.0.0.1",
         .from_port = 1,
         .to_host = "127.0.0.1",
         .to_port = fx.server.port(),

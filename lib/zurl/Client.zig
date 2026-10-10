@@ -2682,20 +2682,27 @@ test "the digest retry carries one authorization header, and no base64 of the pa
 }
 
 test "a credential does not follow a redirect to another origin" {
-    // Two loopback host names, so this is a real origin change by any
-    // rule, a rule that compares host names and not ports included. The
-    // credential used to ride the ordinary headers, which every hop of a
-    // chain carries, so the password arrived at an origin the caller never
-    // named.
+    // Two listeners on one loopback address, each on the port the system
+    // chose for it, so the redirect leaves the origin the caller named.
+    // The credential used to ride the ordinary headers, which every hop
+    // of a chain carries, so the password arrived at an origin the caller
+    // never named.
+    //
+    // **The two differ by port and not by host.** A second loopback
+    // address is not there to be had on every system this builds for:
+    // Darwin carries 127.0.0.1 alone, and a dial to any other address of
+    // 127.0.0.0/8 is dropped rather than refused. The rule under test
+    // withholds a secret on every redirect, this one included, so the
+    // port is enough to tell the two apart.
     var landing: test_server.TestServer = undefined;
-    try landing.startOn("127.0.0.2", &.{
+    try landing.start(&.{
         "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nlanded",
     });
     defer landing.stop();
 
     const redirect = try std.fmt.allocPrint(
         testing.allocator,
-        "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.2:{d}/landed\r\n" ++
+        "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{d}/landed\r\n" ++
             "Content-Length: 0\r\nConnection: close\r\n\r\n",
         .{landing.port()},
     );
@@ -3023,15 +3030,19 @@ test "a caller's authorization header does not follow a redirect to another orig
     // The caller's header used to ride `extra_headers`, which `std` carries
     // to whichever host the chain reaches, so a bearer token arrived at an
     // origin the caller never named.
+    //
+    // The landing listener takes the port the system gives it, which is
+    // what makes it another origin. See the credential test above for why
+    // it is not another address.
     var landing: test_server.TestServer = undefined;
-    try landing.startOn("127.0.0.2", &.{
+    try landing.start(&.{
         "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nlanded",
     });
     defer landing.stop();
 
     const redirect = try std.fmt.allocPrint(
         testing.allocator,
-        "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.2:{d}/landed\r\n" ++
+        "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{d}/landed\r\n" ++
             "Content-Length: 0\r\nConnection: close\r\n\r\n",
         .{landing.port()},
     );
@@ -3104,15 +3115,19 @@ test "a caller's cookie header does not follow a redirect to another origin" {
     // as it keeps an `Authorization`. This header used to ride
     // `extra_headers`, which `std` writes again on every hop, so a session
     // cookie arrived at a host the caller never named.
+    //
+    // The landing listener takes the port the system gives it, which is
+    // what makes it another origin. See the credential test above for why
+    // it is not another address.
     var landing: test_server.TestServer = undefined;
-    try landing.startOn("127.0.0.2", &.{
+    try landing.start(&.{
         "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nlanded",
     });
     defer landing.stop();
 
     const redirect = try std.fmt.allocPrint(
         testing.allocator,
-        "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.2:{d}/landed\r\n" ++
+        "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{d}/landed\r\n" ++
             "Content-Length: 0\r\nConnection: close\r\n\r\n",
         .{landing.port()},
     );
@@ -3222,11 +3237,11 @@ test "a scheme change is another origin, so a secret does not follow it" {
     // it cannot answer, and both sides would wait for the other forever.
     // What this test reads is the request the origin got, which is where
     // the secret either stops or does not.
-    const closed_port = try test_server.closedPort("127.0.0.2");
+    const closed_port = try test_server.closedPort("127.0.0.1");
 
     const redirect = try std.fmt.allocPrint(
         testing.allocator,
-        "HTTP/1.1 302 Found\r\nLocation: https://127.0.0.2:{d}/landed\r\n" ++
+        "HTTP/1.1 302 Found\r\nLocation: https://127.0.0.1:{d}/landed\r\n" ++
             "Content-Length: 0\r\nConnection: close\r\n\r\n",
         .{closed_port},
     );
@@ -3269,11 +3284,11 @@ test "a redirect from http to https still gets trust roots at the tls hop" {
     // The target port has no listener, so the `https` hop fails at the
     // connect. That is enough: the roots load before the connect of the
     // hop that opens them.
-    const closed_port = try test_server.closedPort("127.0.0.2");
+    const closed_port = try test_server.closedPort("127.0.0.1");
 
     const redirect = try std.fmt.allocPrint(
         testing.allocator,
-        "HTTP/1.1 302 Found\r\nLocation: https://127.0.0.2:{d}/landed\r\n" ++
+        "HTTP/1.1 302 Found\r\nLocation: https://127.0.0.1:{d}/landed\r\n" ++
             "Content-Length: 0\r\nConnection: close\r\n\r\n",
         .{closed_port},
     );

@@ -1418,11 +1418,20 @@ test "the first datagram on the wire does not make a peer" {
     // been accepted this transfer holds no peer, so nothing it holds says
     // who may answer. The address the url resolved to is what says it.
     //
-    // The fixture writes an `oack` and a `data` block from 127.0.0.2
-    // before it answers at all. That is a host on the same loopback
-    // interface, which is what an attacker on the same broadcast domain
-    // is. Its file reads "INTRUDER". A client that took it would netboot
-    // an image the server never sent.
+    // The fixture writes an `oack` and a `data` block from a second
+    // loopback address before it answers at all. That address is what an
+    // attacker on the same broadcast domain is. Its file reads
+    // "INTRUDER". A client that took it would netboot an image the server
+    // never sent.
+    //
+    // **A second port cannot stand in for a second address here.** What
+    // the client has at this point is the address it sent to and nothing
+    // else, so the address is the whole of the rule. Darwin carries
+    // 127.0.0.1 alone and refuses a bind of any other address of
+    // 127.0.0.0/8, which leaves the condition impossible to script
+    // there.
+    if (!test_server.foreignHostAvailable()) return error.SkipZigTest;
+
     var server: test_server.Server = undefined;
     try server.start(.{ .file = "payload", .inject_foreign_first = true });
     defer server.stop();
@@ -1622,24 +1631,27 @@ test "--connect-to moves where a tftp read request is sent" {
     // measured: the bare url exits 6 and the same url under either flag
     // reaches the address the flag named.
     //
-    // **No test here touches a resolver.** The url names `127.0.0.2`,
-    // which is an address and never a lookup.
+    // **No test here touches a resolver.** The url names `127.0.0.1`,
+    // which is an address and never a lookup. Port 1 is the dead half:
+    // nothing may listen on a privileged port, and Darwin carries
+    // 127.0.0.1 alone, where a datagram to any other address of
+    // 127.0.0.0/8 is dropped and the open waits instead of failing.
     var server: test_server.Server = undefined;
     try server.start(.{ .file = "moved", .answer_options = false });
     defer server.stop();
 
     var fetcher: Fetcher = .init(testing.allocator, testing.io);
     defer fetcher.deinit();
-    const url = try parseTftpUrl("tftp://127.0.0.2:1/f.txt");
+    const url = try parseTftpUrl("tftp://127.0.0.1:1/f.txt");
 
-    // Nothing serves `127.0.0.2:1`, so the bare url gets no datagram back
+    // Nothing serves `127.0.0.1:1`, so the bare url gets no datagram back
     // and reports the peer that never answered.
     var bare: Diagnostics = .{};
     try testing.expectError(error.CouldNotConnect, fetcher.open(url, quick, &bare));
 
     var moved = quick;
     moved.connect_to = &.{.{
-        .from_host = "127.0.0.2",
+        .from_host = "127.0.0.1",
         .from_port = 1,
         .to_host = "127.0.0.1",
         .to_port = server.port(),

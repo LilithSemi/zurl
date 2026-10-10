@@ -2227,9 +2227,12 @@ test "--connect-to moves a websocket dial and --resolve reaches this package too
     // user who named either flag got a dial to the url's own host and no
     // diagnostic.
     //
-    // **No test here touches a resolver.** The url names `127.0.0.2:1`,
+    // **No test here touches a resolver.** The url names `127.0.0.1:1`,
     // which refuses at once, so the flag is the only thing that can reach
-    // the fixture.
+    // the fixture. Port 1 is the dead half and the fixture's own port is
+    // the live one: a second loopback address would say the same thing,
+    // and Darwin carries 127.0.0.1 alone, where a dial to any other
+    // address of 127.0.0.0/8 is dropped rather than refused.
     var frames: [64]u8 = undefined;
     const at = test_server.serverFrame(&frames, .close, "\x03\xe8", true).len;
 
@@ -2239,14 +2242,14 @@ test "--connect-to moves a websocket dial and --resolve reaches this package too
 
     var f: Fetcher = .init(testing.allocator, testing.io);
     defer f.deinit();
-    const url = try parseUrl("ws://127.0.0.2:1/chat");
+    const url = try parseUrl("ws://127.0.0.1:1/chat");
 
     var bare: Diagnostics = .{};
     try testing.expectError(error.CouldNotConnect, f.open(url, .{}, &bare));
     try testing.expectEqual(@as(usize, 0), server.connections());
 
     const body = try f.open(url, .{ .connect_to = &.{.{
-        .from_host = "127.0.0.2",
+        .from_host = "127.0.0.1",
         .from_port = 1,
         .to_host = "127.0.0.1",
         .to_port = server.port(),
@@ -2254,11 +2257,13 @@ test "--connect-to moves a websocket dial and --resolve reaches this package too
     _ = body;
     try testing.expectEqual(@as(usize, 1), server.connections());
 
-    // **The `Host:` line still names the url's own host.** A moved dial
-    // must not rewrite the handshake, and for `wss` the same text is the
-    // name the certificate is checked against.
-    try testing.expect(std.mem.indexOf(u8, server.received(), "Host: 127.0.0.2:1") != null);
-    try testing.expect(std.mem.indexOf(u8, server.received(), "Host: 127.0.0.1") == null);
+    // **The `Host:` line still names the port the url named.** A moved
+    // dial must not rewrite the handshake, and for `wss` the same text is
+    // the name the certificate is checked against.
+    var dialed: [64]u8 = undefined;
+    const dialed_authority = try std.fmt.bufPrint(&dialed, "Host: 127.0.0.1:{d}", .{server.port()});
+    try testing.expect(std.mem.indexOf(u8, server.received(), "Host: 127.0.0.1:1") != null);
+    try testing.expect(std.mem.indexOf(u8, server.received(), dialed_authority) == null);
 }
 
 test "a moved dial leaves a wss certificate checked against the url's own name" {

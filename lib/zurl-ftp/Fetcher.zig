@@ -2883,10 +2883,14 @@ test "--connect-to moves the ftp control dial, and the data connection follows i
     // the control connection had reached, on the port the answer named.
     //
     // **No test here touches a resolver, and neither does the transfer.**
-    // The url names `127.0.0.2:1`, which refuses at once, so the flag is
-    // the only thing that can reach the fixture. The data connection asks
-    // no resolver either, whatever the url named: `dataTarget` hands back
-    // an address and has no way to name a host.
+    // The url names `127.0.0.1:1`, which refuses at once, so the flag is
+    // the only thing that can reach the fixture. Port 1 is the dead half
+    // and the fixture's own port is the live one: a second loopback
+    // address would say the same thing, and Darwin carries 127.0.0.1
+    // alone, where a dial to any other address of 127.0.0.0/8 is dropped
+    // rather than refused. The data connection asks no resolver either,
+    // whatever the url named: `dataTarget` hands back an address and has
+    // no way to name a host.
     var server: test_server.Server = undefined;
     try server.start(.{
         .epsv = false,
@@ -2897,7 +2901,7 @@ test "--connect-to moves the ftp control dial, and the data connection follows i
 
     var f: Fetcher = .init(testing.allocator, testing.io);
     defer f.deinit();
-    const url = try parseFtpUrl("ftp://127.0.0.2:1/f.txt");
+    const url = try parseFtpUrl("ftp://127.0.0.1:1/f.txt");
 
     // Without an entry the dial goes where the url says and is refused.
     var bare: Diagnostics = .{};
@@ -2909,7 +2913,7 @@ test "--connect-to moves the ftp control dial, and the data connection follows i
     const body = try f.open(url, .{
         .connect_timeout = test_connect_timeout,
         .connect_to = &.{.{
-            .from_host = "127.0.0.2",
+            .from_host = "127.0.0.1",
             .from_port = 1,
             .to_host = "127.0.0.1",
             .to_port = server.port(),

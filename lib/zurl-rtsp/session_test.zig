@@ -604,9 +604,12 @@ test "--connect-to moves an rtsp dial and --resolve reaches this package too" {
     // user who named either flag got a dial to the url's own host and no
     // diagnostic. curl 8.21.0 applies both to `rtsp`, measured.
     //
-    // **No test here touches a resolver.** The url names `127.0.0.2:1`,
+    // **No test here touches a resolver.** The url names `127.0.0.1:1`,
     // which refuses at once, so the flag is the only thing that can reach
-    // the fixture.
+    // the fixture. Port 1 is the dead half and the fixture's own port is
+    // the live one: a second loopback address would say the same thing,
+    // and Darwin carries 127.0.0.1 alone, where a dial to any other
+    // address of 127.0.0.0/8 is dropped rather than refused.
     var server: test_server.Server = undefined;
     try server.start(.{ .headers = &.{"Server: gortsplib"} });
     defer server.stop();
@@ -614,14 +617,14 @@ test "--connect-to moves an rtsp dial and --resolve reaches this package too" {
     const f = try Fetcher.create(testing.allocator, testing.io);
     defer f.destroy();
 
-    const url = try Fetcher.parseRtspUrl("rtsp://127.0.0.2:1/stream");
+    const url = try Fetcher.parseRtspUrl("rtsp://127.0.0.1:1/stream");
 
     var bare: zurl_core.Diagnostics = .{};
     try testing.expectError(error.CouldNotConnect, f.open(url, .{}, &bare));
     try testing.expectEqual(@as(usize, 0), server.connections());
 
     const answer = try f.open(url, .{ .connect_to = &.{.{
-        .from_host = "127.0.0.2",
+        .from_host = "127.0.0.1",
         .from_port = 1,
         .to_host = "127.0.0.1",
         .to_port = server.port(),

@@ -3080,16 +3080,19 @@ test "--connect-to moves an smtp dial and --resolve reaches this package too" {
     // diagnostic. curl 8.21.0 applies both to `smtp` and `smtps`,
     // measured.
     //
-    // **No test here touches a resolver.** The url names `127.0.0.2:1`,
+    // **No test here touches a resolver.** The url names `127.0.0.1:1`,
     // which refuses at once, so the flag is the only thing that can reach
-    // the fixture.
+    // the fixture. Port 1 is the dead half: a second loopback address
+    // would say the same thing, and Darwin carries 127.0.0.1 alone,
+    // where a dial to any other address of 127.0.0.0/8 is dropped rather
+    // than refused.
     var server: test_server.Server = undefined;
     try server.start(.{});
     defer server.stop();
 
     var f: Fetcher = .init(testing.allocator, testing.io);
     defer f.deinit();
-    const url = try parseSmtpUrl("smtp://127.0.0.2:1/mail.example.com");
+    const url = try parseSmtpUrl("smtp://127.0.0.1:1/mail.example.com");
 
     var first: Slice = .{ .bytes = "Subject: hi\r\n\r\nbody\r\n" };
     var bare: Diagnostics = .{};
@@ -3108,7 +3111,7 @@ test "--connect-to moves an smtp dial and --resolve reaches this package too" {
         .mail_rcpt = &.{"c@d.example"},
         .body = second.source(),
         .connect_to = &.{.{
-            .from_host = "127.0.0.2",
+            .from_host = "127.0.0.1",
             .from_port = 1,
             .to_host = "127.0.0.1",
             .to_port = server.port(),

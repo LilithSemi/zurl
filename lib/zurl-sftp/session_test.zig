@@ -460,15 +460,18 @@ test "--connect-to moves an sftp dial and the host key check keeps the url's nam
     // `known_hosts` record is looked up under.
     // `zurl_ssh.Client` tests that split against a recording verifier.
     //
-    // **No test here touches a resolver.** The url names `127.0.0.2:1`,
+    // **No test here touches a resolver.** The url names `127.0.0.1:1`,
     // which refuses at once, so the flag is the only thing that can reach
-    // the fixture.
+    // the fixture. Port 1 is the dead half and the fixture's own port is
+    // the live one: a second loopback address would say the same thing,
+    // and Darwin carries 127.0.0.1 alone, where a dial to any other
+    // address of 127.0.0.0/8 is dropped rather than refused.
     const contents = "moved by --connect-to\n";
     var f = try TransferFixture.start(.{ .sftp = .{ .contents = contents } });
     defer f.stop();
 
     var away = f.url("/f.txt");
-    away.host = "127.0.0.2";
+    away.host = "127.0.0.1";
     away.port = 1;
 
     var bare: zurl_core.Diagnostics = .{};
@@ -479,7 +482,7 @@ test "--connect-to moves an sftp dial and the host key check keeps the url's nam
 
     var moved = f.options();
     moved.connect_to = &.{.{
-        .from_host = "127.0.0.2",
+        .from_host = "127.0.0.1",
         .from_port = 1,
         .to_host = "127.0.0.1",
         .to_port = f.server.port(),

@@ -8371,7 +8371,16 @@ test "a body that is slow but keeps arriving runs past the bound and completes" 
     // A floor, and it is over the bound: ten gaps of 40 milliseconds
     // cannot pass in less than 400. That is what says the deadline counts
     // one read and not the whole transfer.
-    try testing.expect(elapsedNs(started) >= 400 * std.time.ns_per_ms);
+    //
+    // The number goes into the failure because a floor can only break
+    // two ways, and they need different fixes: the clock did not advance,
+    // or the fixture's sleeps did not sleep. See the two tests of those
+    // in `zurl-net/tcp.zig`.
+    const elapsed = elapsedNs(started);
+    if (elapsed < 400 * std.time.ns_per_ms) {
+        std.debug.print("the body arrived in {d} ns, under the 400 ms floor\n", .{elapsed});
+        return error.TestUnexpectedResult;
+    }
 }
 
 test "a connection whose read timed out never serves the next request" {

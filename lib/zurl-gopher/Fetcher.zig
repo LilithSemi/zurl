@@ -1216,23 +1216,26 @@ test "--connect-to moves a gopher dial and --resolve reaches this package too" {
     // user who named either flag got a dial to the url's own host and no
     // diagnostic. curl 8.21.0 applies both to `gopher`, measured.
     //
-    // **No test here touches a resolver.** The url names `127.0.0.2:1`,
+    // **No test here touches a resolver.** The url names `127.0.0.1:1`,
     // which refuses at once, so the flag is the only thing that can reach
-    // the server below.
+    // the server below. Port 1 is the dead half: a second loopback
+    // address would say the same thing, and Darwin carries 127.0.0.1
+    // alone, where a dial to any other address of 127.0.0.0/8 is dropped
+    // rather than refused.
     var server: test_server.Server = undefined;
     try server.start("iline\tfake\t(NULL)\t0\r\n.\r\n");
     defer server.stop();
 
     var fetcher: Fetcher = .init(testing.allocator, testing.io);
     defer fetcher.deinit();
-    const url = try parseGopherUrl("gopher://127.0.0.2:1/1/");
+    const url = try parseGopherUrl("gopher://127.0.0.1:1/1/");
 
     var bare: Diagnostics = .{};
     try testing.expectError(error.CouldNotConnect, fetcher.open(url, .{}, &bare));
     try testing.expectEqual(@as(usize, 0), server.connections());
 
     const overrides: []const zurl_net.override.HostOverride = &.{.{
-        .from_host = "127.0.0.2",
+        .from_host = "127.0.0.1",
         .from_port = 1,
         .to_host = "127.0.0.1",
         .to_port = server.port(),

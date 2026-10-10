@@ -373,19 +373,59 @@ fn setNoDelay(stream: std.Io.net.Stream, slot: ?*?NoDelayError) void {
 /// The `setsockopt` call itself, apart from the recording, so a test can
 /// read its result.
 fn apply(stream: std.Io.net.Stream) NoDelayError!void {
-    // Zig 0.16 gives `std.posix.setsockopt` no body for Windows, and WASI
-    // has no socket options at all. The check is comptime, so neither
-    // build analyses the call below.
+    // Zig gives `std.posix.setsockopt` no body for Windows, and WASI has
+    // no socket options at all. The check is comptime, so neither build
+    // analyses the call below.
     if (builtin.os.tag == .windows or builtin.os.tag == .wasi) {
         return error.SocketOptionUnsupported;
     }
     const on: c_int = 1;
+    if (comptime builtin.os.tag.isDarwin()) return applyDarwin(stream, &on);
     return std.posix.setsockopt(
         stream.socket.handle,
         std.posix.IPPROTO.TCP,
         std.posix.TCP.NODELAY,
         std.mem.asBytes(&on),
     );
+}
+
+/// The same call on Darwin, reading the number the system wrote rather
+/// than the name `std` gives it.
+///
+/// **`std.posix.setsockopt` cannot report this option on Darwin.**
+/// `std.c.E` for Darwin names every code from 0 to 107 except 102, and
+/// 102 is `EOPNOTSUPP`, which is what Darwin answers for an option a
+/// socket does not carry. `std.c.errno` turns the number into the enum
+/// with `@fromBackingInt`, so the code with no name stops the process
+/// there: a panic with the safety checks on, and undefined behaviour
+/// without them. `std` holds `OPNOTSUPP = 45`, which is Darwin's
+/// `ENOTSUP` and a different code.
+///
+/// So the number is read here and matched as a number. Every code Darwin
+/// can answer has an arm, and anything else is `Unexpected`, which keeps
+/// the promise this file makes: the option can fail and the dial carries
+/// on.
+fn applyDarwin(stream: std.Io.net.Stream, on: *const c_int) NoDelayError!void {
+    const rc = std.c.setsockopt(
+        stream.socket.handle,
+        std.posix.IPPROTO.TCP,
+        std.posix.TCP.NODELAY,
+        on,
+        @sizeOf(c_int),
+    );
+    if (rc != -1) return;
+    return switch (std.c._errno().*) {
+        // `EOPNOTSUPP`, the code with no name in `std`, and `ENOTSUP`,
+        // which Darwin numbers apart from it.
+        102, 45 => error.OperationUnsupported,
+        42 => error.InvalidProtocolOption, // ENOPROTOOPT
+        12, 55 => error.SystemResources, // ENOMEM, ENOBUFS
+        1 => error.PermissionDenied, // EPERM
+        56 => error.AlreadyConnected, // EISCONN
+        9, 38 => error.FileDescriptorNotASocket, // EBADF, ENOTSOCK
+        22 => error.InvalidProtocolOption, // EINVAL
+        else => error.Unexpected,
+    };
 }
 
 /// The connect, as its own task, so `bounded` can race it.
@@ -787,6 +827,21 @@ const loopback = "127.0.0.1";
 /// the second family.
 const loopback6 = "::1";
 
+/// A port on loopback that refuses every connect.
+///
+/// **Nothing is bound to it, on purpose.** A bound socket with no
+/// listener behind it is refused on Linux, which answers a reset after
+/// finding no listener, and is dropped on the BSD kernels, Darwin among
+/// them, which find a control block that is not listening and answer
+/// nothing. A dial to such a port reads as a timeout there and not as a
+/// refusal. A port with no control block is refused on both.
+///
+/// It is below 1024 so that no test can bind it: a port a parallel test
+/// binary could take would leave this dial waiting on a stranger for an
+/// answer that never comes. `zurl-http/test_server.refused_port` is the
+/// same port, for the tests of the layers above this one.
+const refused_port = 1;
+
 /// `loopback` as a dial target.
 fn loopbackHost() Host {
     // The text is a constant in this file, so text that does not read as
@@ -797,6 +852,45 @@ fn loopbackHost() Host {
 /// A `std.Io.Timeout` of `ms` milliseconds on the awake clock.
 fn millis(ms: i64) std.Io.Timeout {
     return .{ .duration = .{ .raw = .fromMilliseconds(ms), .clock = .awake } };
+}
+
+test "the awake clock advances, which every bound in this package reads" {
+    // **Two primitives hold up every timeout zurl has**, and neither one
+    // has a name in a failure when it goes wrong: a bound that never
+    // fires and a bound that fires at once look the same from above. So
+    // each gets a test of its own here, at the layer that owns the
+    // bounds.
+    //
+    // `std.Io.Threaded` answers a clock it cannot read with a timestamp
+    // of zero and no fault, so a clock that is not there reads as a
+    // transfer that took no time.
+    const first = std.Io.Timestamp.now(testing.io, .awake);
+    try millis(20).sleep(testing.io);
+    const second = std.Io.Timestamp.now(testing.io, .awake);
+
+    const moved = first.durationTo(second).nanoseconds;
+    if (moved <= 0) {
+        std.debug.print("the awake clock moved {d} ns over a 20 ms sleep\n", .{moved});
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "a sleep on the awake clock waits for as long as it was given" {
+    // The other primitive. `std.Io.Threaded` has no `clock_nanosleep` on
+    // every system, and the path it takes instead reports success for
+    // every fault but an interrupt, so a sleep that cannot happen
+    // returns at once and says nothing.
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    try millis(50).sleep(testing.io);
+    const waited = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).nanoseconds;
+
+    // A floor well under the 50 milliseconds asked for, because a loaded
+    // machine may round a sleep down a little and this test is about a
+    // sleep that does not happen at all.
+    if (waited < 25 * std.time.ns_per_ms) {
+        std.debug.print("a 50 ms sleep waited {d} ns\n", .{waited});
+        return error.TestUnexpectedResult;
+    }
 }
 
 /// A threaded `Io` whose `concurrent` always reports
@@ -823,22 +917,9 @@ test "a dial with no bound reaches a listening port" {
 }
 
 test "a dial to a closed port reports the connection, not the name" {
-    // **The socket stays bound, and nothing listens on it.** An operating
-    // system refuses a connect to a bound socket with no listener behind
-    // it, and it lets no other socket take that port meanwhile. A test
-    // that reads the number and closes the socket leaves the port free,
-    // and another test binary of a parallel suite can take it between the
-    // two steps. This dial would then reach a stranger and wait for an
-    // answer that never comes. `zurl-http/test_server.closedPort` holds a
-    // port the same way, for the tests of the layers above this one.
-    var address = try std.Io.net.IpAddress.parse(loopback, 0);
-    const held = try address.bind(testing.io, .{ .mode = .stream });
-    defer held.close(testing.io);
-    const port = held.address.getPort();
-
     try testing.expectError(
         error.CouldNotConnect,
-        dial(testing.io, loopbackHost(), port, .{}),
+        dial(testing.io, loopbackHost(), refused_port, .{}),
     );
 }
 

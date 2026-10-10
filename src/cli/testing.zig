@@ -265,10 +265,10 @@ pub fn afterMeter(stderr: []const u8) ![]const u8 {
 /// transfer failed" test needs. Needs no concurrency, so it works even
 /// in a build that has none.
 ///
-/// `test_server.closedPort` holds the port for the life of this process.
-/// See it for why the socket is never released: a port that is read and
-/// then freed can be taken by another test binary of a parallel suite,
-/// and the test then reaches a stranger instead of a refusal.
+/// `test_server.closedPort` answers with a privileged port that carries
+/// no socket. See it for why: a port no test can bind cannot be taken by
+/// another test binary of a parallel suite, and a port with no control
+/// block is refused on Linux and on Darwin alike.
 pub fn closedPort() !u16 {
     return test_server.closedPort("127.0.0.1");
 }

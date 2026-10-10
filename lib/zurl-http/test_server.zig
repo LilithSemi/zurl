@@ -123,9 +123,17 @@ pub fn start(self: *TestServer, script: []const Response) !void {
 /// names here, and not only two ports. A rule that compares host names,
 /// which is what `std.http.Client.Request.redirect` does, reads
 /// `127.0.0.1:1` and `127.0.0.1:2` as one origin, so a port alone proves
-/// nothing about such a rule. Every address in 127.0.0.0/8 is loopback, so
-/// `127.0.0.2` gives a second host name that reaches this machine and
-/// never the network.
+/// nothing about such a rule. Every address in 127.0.0.0/8 is loopback on
+/// Linux, so `127.0.0.2` gives a second host name that reaches this
+/// machine and never the network.
+///
+/// **A second address is not there on every system.** Darwin carries
+/// 127.0.0.1 alone, and a bind of any other address of 127.0.0.0/8
+/// reports `error.AddressUnavailable` there. A caller that needs a second
+/// address must therefore answer that error, and the only two answers
+/// that keep a suite honest are to skip the test or to report the fault.
+/// A test whose rule is satisfied by a second port should take the port
+/// and leave this function alone.
 ///
 /// `host` may be an IPv6 address. `::1` is loopback too, so a test of the
 /// IPv6 path stays offline like every other test here. A url that names
@@ -385,40 +393,39 @@ test "an RLE block is tiny on the wire and large once decoded" {
     try testing.expectEqual(zstd_block_len_max, decoded.len);
 }
 
-/// How many refused ports one process may hold. Each one costs a file
-/// descriptor until the process ends, so the count is bounded and a test
-/// that asks for more gets a name for it.
-pub const closed_ports_max = 64;
+/// The port every refused dial in this suite goes to. See `closedPort`
+/// for why it is a privileged one and why nothing is bound to it.
+pub const refused_port = 1;
 
-var closed_port_sockets: [closed_ports_max]std.Io.net.Socket = undefined;
-var closed_port_count: usize = 0;
-
-/// A port on `host` that refuses every connect for as long as the process
-/// runs. `host` is a numeric address, "127.0.0.1" or "::1" among them.
+/// A port on `host` that refuses every connect. `host` is a numeric
+/// address, "127.0.0.1" or "::1" among them.
 ///
-/// **The socket stays bound, and nothing ever listens on it.** An
-/// operating system refuses a connect to a bound socket with no listener
-/// behind it, which is the fault a test of a failed dial wants, and it
-/// lets no other socket take that port meanwhile.
+/// **The port carries no socket at all, on purpose.** A bound socket with
+/// no listener behind it is not the same fault on every system. Linux
+/// looks for a listener, finds none, and answers a reset, which is the
+/// refusal a test of a failed dial wants. The BSD kernels, Darwin among
+/// them, find a control block that is not listening and answer nothing,
+/// so the connect waits for its whole timeout and the test reads a
+/// timeout where it asked for a refusal. A port with no control block is
+/// refused by both.
 ///
-/// A test that binds a port, reads the number, and closes the socket gets
-/// the same fault only while the port stays free. Several test binaries
-/// run at once under `zig build test`, and one of them can take the freed
-/// port between the two steps. The test then reaches a stranger instead of
-/// a refusal, and waits for an answer that stranger will never send. That
-/// is a hung suite, not a failed assertion, so the port is held instead.
+/// **A port below 1024 is a port no test can take.** Binding one asks for
+/// a privilege a test process does not hold, so `refused_port` cannot
+/// fill up underneath a suite the way a freed ephemeral port can: several
+/// test binaries run at once under `zig build test`, and one taking the
+/// port would leave another waiting on a stranger for an answer that
+/// never comes. That is a hung suite rather than a failed assertion.
 ///
-/// The socket is never closed. `closed_ports_max` bounds the cost, and the
-/// test process ends soon after the last test.
-///
-/// Called from the test thread alone, which is where every test runs.
+/// `host` is bound once and closed again, which answers one question
+/// only: whether this machine carries that address family. A caller that
+/// asks for "::1" on a machine with no IPv6 gets
+/// `error.AddressFamilyUnsupported` or `error.AddressUnavailable` here
+/// and skips its test. The port that comes back is never the bound one.
 pub fn closedPort(host: []const u8) !u16 {
-    if (closed_port_count == closed_ports_max) return error.TooManyClosedPorts;
     var address = try std.Io.net.IpAddress.parse(host, 0);
-    const socket = try address.bind(testing.io, .{ .mode = .stream });
-    closed_port_sockets[closed_port_count] = socket;
-    closed_port_count += 1;
-    return socket.address.getPort();
+    const probe = try address.bind(testing.io, .{ .mode = .stream });
+    probe.close(testing.io);
+    return refused_port;
 }
 
 /// Whether the task that owns `reader` and `writer` has been canceled.
@@ -760,22 +767,21 @@ test "stop returns on a script the test never used up, instead of hanging" {
     try testing.expect(std.mem.endsWith(u8, body, "ok"));
 }
 
-test "closedPort refuses a connect and keeps the port while the process runs" {
-    // The two halves are one rule: a port that refuses is only useful
-    // while nothing else can take it. A test that reads the number and
-    // releases the socket gets the first half alone, and under a parallel
-    // suite the second half is what keeps it deterministic.
-    const held = try closedPort("127.0.0.1");
+test "closedPort refuses a connect, and refuses it the same way twice" {
+    // **A refusal and never a timeout.** Every test of a failed dial in
+    // this project reads this one fault, and a port that drops a connect
+    // instead of refusing it turns each of those tests into a wait. The
+    // second dial is here because the port carries no socket: nothing is
+    // held between the two calls, so the second one proves the refusal
+    // does not depend on anything the first left behind.
+    const refused = try closedPort("127.0.0.1");
+    try testing.expectEqual(refused_port, refused);
 
-    var target: std.Io.net.IpAddress = .{ .ip4 = .loopback(held) };
-    try testing.expectError(
-        error.ConnectionRefused,
-        target.connect(testing.io, .{ .mode = .stream }),
-    );
-
-    var again: std.Io.net.IpAddress = .{ .ip4 = .loopback(held) };
-    try testing.expectError(
-        error.AddressInUse,
-        again.listen(testing.io, .{ .reuse_address = true }),
-    );
+    for (0..2) |_| {
+        var target: std.Io.net.IpAddress = .{ .ip4 = .loopback(refused) };
+        try testing.expectError(
+            error.ConnectionRefused,
+            target.connect(testing.io, .{ .mode = .stream }),
+        );
+    }
 }

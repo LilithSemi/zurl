@@ -37,6 +37,28 @@ pub const capture_bytes = 1024;
 /// list, so this bounds the transfers a test may script.
 pub const max_acks = 64;
 
+/// The address `inject_foreign_first` writes from, which stands for a
+/// stranger on the same loopback interface.
+///
+/// **Not every system carries it.** Linux holds the whole of
+/// 127.0.0.0/8, and Darwin holds 127.0.0.1 alone, so a bind of this
+/// address is refused there. `foreignHostAvailable` is how a test finds
+/// out before it scripts one.
+pub const foreign_host = "127.0.0.2";
+
+/// Whether this system lets a socket bind `foreign_host`.
+///
+/// A test that needs a second address asks this and skips when the
+/// answer is no. The rule such a test reads is about the address a
+/// datagram came from, and another port on one address cannot stand in
+/// for another address.
+pub fn foreignHostAvailable() bool {
+    var address = Io.net.IpAddress.parse(foreign_host, 0) catch return false;
+    const socket = address.bind(testing.io, .{ .mode = .dgram }) catch return false;
+    socket.close(testing.io);
+    return true;
+}
+
 /// What the fixture answers with.
 pub const Script = struct {
     /// The bytes the client should end up with.
@@ -77,9 +99,9 @@ pub const Script = struct {
     ///
     /// This is the open half of the transfer identifier rule. The client
     /// has no peer yet, so nothing it holds says who may answer. Only the
-    /// address the url resolved to says it. The sender uses 127.0.0.2, so
-    /// it is a different address on the same loopback interface and no
-    /// test reaches the network.
+    /// address the url resolved to says it. The sender uses
+    /// `foreign_host`, so it is a different address on the same loopback
+    /// interface and no test reaches the network.
     inject_foreign_first: bool = false,
     /// Whether to answer the request and then send nothing more. This is
     /// a peer that was there and then stopped, which a client must tell
@@ -217,7 +239,7 @@ fn run(s: *Server, script: Script) void {
     var early: ?Io.net.Socket = null;
     defer if (early) |socket| socket.close(testing.io);
     if (script.inject_foreign_first) {
-        var early_address = Io.net.IpAddress.parse("127.0.0.2", 0) catch return;
+        var early_address = Io.net.IpAddress.parse(foreign_host, 0) catch return;
         const socket = early_address.bind(testing.io, .{ .mode = .dgram }) catch return;
         early = socket;
 
