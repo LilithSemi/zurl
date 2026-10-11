@@ -8342,8 +8342,16 @@ test "a body that is slow but keeps arriving runs past the bound and completes" 
     }});
     defer server.stop();
 
+    // **The bound has to sit between one gap and the whole transfer**, and
+    // anywhere in that range reads the same rule. It sits well above the
+    // gap rather than just above it, because the margin is what a loaded
+    // machine eats into: a runner that holds the fixture off its next
+    // write for longer than the bound would end this transfer and read as
+    // a deadline on the total, which is the opposite of what this test
+    // says. 300 leaves 260 milliseconds of room over a 40 millisecond gap
+    // and still ends under the 400 the body takes.
     var http_engine: Engine = .init(testing.allocator, testing.io, .{
-        .read_timeout = readTimeoutMs(150),
+        .read_timeout = readTimeoutMs(300),
     });
     defer http_engine.deinit();
     const iface = http_engine.interface();
@@ -8352,30 +8360,42 @@ test "a body that is slow but keeps arriving runs past the bound and completes" 
     defer testing.allocator.free(url_text);
     const url = try zurl_core.url.parse(url_text);
 
+    // **Each step below names itself when it fails.** A plain `try` in a
+    // test writes nothing, and the test runner prints only what the test
+    // wrote, so a failing `try` reads as "failed without output" and says
+    // neither which step stopped nor why. Three steps here can fail for
+    // three different reasons, and the reason is the whole of the fix.
     const started = std.Io.Timestamp.now(testing.io, .awake);
-    const exchange = try iface.open(.{
+    const exchange = iface.open(.{
         .method = .GET,
         .url = url,
         .headers = &.{},
         .redirects = .unfollowed,
-    });
+    }) catch |err| {
+        std.debug.print("the open stopped with {t}\n", .{err});
+        return err;
+    };
     defer exchange.close();
 
     var body_buffer: [64]u8 = undefined;
     const body = exchange.bodyReader(&body_buffer);
-    const contents = try body.allocRemaining(testing.allocator, .unlimited);
+    const contents = body.allocRemaining(testing.allocator, .unlimited) catch |err| {
+        std.debug.print(
+            "the body stopped with {t} after {d} ns\n",
+            .{ err, elapsedNs(started) },
+        );
+        return err;
+    };
     defer testing.allocator.free(contents);
     try testing.expectEqualStrings("xxxxxxxxxx", contents);
-    try exchange.check();
+    exchange.check() catch |err| {
+        std.debug.print("the transfer ended with {t}\n", .{err});
+        return err;
+    };
 
     // A floor, and it is over the bound: ten gaps of 40 milliseconds
     // cannot pass in less than 400. That is what says the deadline counts
     // one read and not the whole transfer.
-    //
-    // The number goes into the failure because a floor can only break
-    // two ways, and they need different fixes: the clock did not advance,
-    // or the fixture's sleeps did not sleep. See the two tests of those
-    // in `zurl-net/tcp.zig`.
     const elapsed = elapsedNs(started);
     if (elapsed < 400 * std.time.ns_per_ms) {
         std.debug.print("the body arrived in {d} ns, under the 400 ms floor\n", .{elapsed});
