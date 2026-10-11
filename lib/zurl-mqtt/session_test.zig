@@ -386,20 +386,31 @@ test "a broker that closes after the connect is a fault and not an empty answer"
     var storage: [64]u8 = undefined;
     const url = try urlFor(&storage, server.port(), "/t/x");
 
-    // **Two answers, and both are the same fault told two ways.** The
-    // broker's close and this client's SUBSCRIBE cross on the wire, so the
-    // write reaches a socket that is closing or the read reaches one that
-    // already closed, depending on which the kernel finished first. Either
-    // is the transfer ending because the broker went away, and pinning one
-    // of the two would be a test that fails on a loaded machine.
+    // **Three answers, and all three are the same fault told three
+    // ways.** The broker's close and this client's SUBSCRIBE cross on the
+    // wire, so the write reaches a socket that is closing or the read
+    // reaches one that already closed, depending on which the kernel
+    // finished first. Pinning one of them would be a test that fails on a
+    // loaded machine.
+    //
+    // The third depends on the system rather than on the race. Linux ends
+    // the stream cleanly, so the reply grammar runs out of input and the
+    // fault is `WeirdServerReply`. Darwin answers a read on a socket the
+    // peer closed with a reset, so the read itself fails and the fault is
+    // `ReadError`. curl tells the two apart the same way, with exit 8 for
+    // a reply that stopped early and exit 56 for a failed read, so this
+    // is the system showing through and not zurl disagreeing with itself.
+    //
+    // What the test name claims is pinned below whichever name arrives:
+    // the open must fail, and it must carry a message.
     var d: zurl_core.Diagnostics = .{};
     if (f.open(url, .{}, &d)) |_| {
         return error.TestExpectedBrokerFault;
     } else |fault| switch (fault) {
-        error.WeirdServerReply, error.WriteError => {},
-        // A third name here is a system that ends a closed connection
-        // its own way, and the name is what says which one. Reading it
-        // from the failure beats reading "failed" and guessing.
+        error.WeirdServerReply, error.WriteError, error.ReadError => {},
+        // A fourth name is a system that ends a closed connection its own
+        // way again, and the name is what says which one. Reading it from
+        // the failure beats reading "failed" and guessing.
         else => {
             std.debug.print("the broker's close read as {t}\n", .{fault});
             return error.TestUnexpectedResult;
