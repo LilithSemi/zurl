@@ -1989,6 +1989,25 @@ fn validateLocation(location: []const u8) engine.OpenError!void {
     if (zurl_core.url.hasUnsafeByte(location)) return error.InvalidUrl;
 }
 
+/// Whether `text` starts with a scheme: a colon that follows only the
+/// characters a scheme holds and comes before the first `/`, `?`, or `#`.
+/// RFC 3986 appendix A is the grammar.
+///
+/// `std.Uri.parse` fails a scheme-less text with `InvalidFormat`, which a
+/// malformed authority answers too, so its error alone cannot tell a
+/// relative target from an absolute one that did not read.
+fn namesScheme(text: []const u8) bool {
+    for (text, 0..) |byte, index| {
+        switch (byte) {
+            ':' => return index > 0,
+            '/', '?', '#' => return false,
+            'a'...'z', 'A'...'Z', '0'...'9', '+', '-', '.' => {},
+            else => return false,
+        }
+    }
+    return false;
+}
+
 /// Room for a jar's `Cookie` value and one `Cookie` the caller wrote,
 /// joined into the single line RFC 6265 section 5.4 sends.
 ///
@@ -3938,8 +3957,20 @@ const Exchange = struct {
         // names one and the base's host when it does not. So this is that
         // host, read here where the colons of an address are still there
         // to read. See `maskHost` for why they cannot stay.
-        const target = std.Uri.parse(copy) catch
-            std.Uri.parseAfterScheme("", copy) catch return error.InvalidUrl;
+        //
+        // **A location that names a scheme is absolute, and a parse that
+        // failed on one failed on its authority.** A host longer than the
+        // dns encoding holds is the shape that reaches this: Zig 0.17.0
+        // answers `error.InvalidHostName` there, where 0.16.0 read the
+        // name and this function refused it further down at the host
+        // storage bound. The relative fallback below would take the whole
+        // text as a path, resolve it against the origin that redirected,
+        // and send the request there a second time, so it runs only for a
+        // location that names no scheme at all.
+        const target = std.Uri.parse(copy) catch target: {
+            if (namesScheme(location)) return error.InvalidUrl;
+            break :target std.Uri.parseAfterScheme("", copy) catch return error.InvalidUrl;
+        };
 
         // **A redirect may not widen the set of protocols the transfer
         // speaks.** The user named the scheme of the first url; a
@@ -7792,6 +7823,34 @@ test "a redirect to a malformed location is an invalid-url error, not a panic" {
     var server: test_server.TestServer = undefined;
     try server.start(&.{
         "HTTP/1.1 302 Found\r\nLocation: http://ex ample.com/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    });
+    defer server.stop();
+
+    var http_engine: Engine = .init(testing.allocator, testing.io, .{});
+    defer http_engine.deinit();
+    const iface = http_engine.interface();
+
+    const url_text = try std.fmt.allocPrint(testing.allocator, "http://127.0.0.1:{d}/", .{server.port()});
+    defer testing.allocator.free(url_text);
+    const url = try zurl_core.url.parse(url_text);
+
+    try testing.expectError(
+        error.InvalidUrl,
+        iface.open(.{ .method = .GET, .url = url, .headers = &.{}, .redirects = .{ .follow = 1 } }),
+    );
+}
+
+test "a redirect to a host longer than the dns encoding holds is an invalid-url error, not a relative target" {
+    // Zig 0.17.0 is where `std.Uri.parse` began refusing such a host with
+    // `error.InvalidHostName`. Before the `namesScheme` check, the relative
+    // fallback read the whole url as a path and this exchange answered the
+    // origin a second time, with no scripted response left for it: a read
+    // that ran to its whole bound and a transfer that reported a timeout
+    // for a location no resolver could ever have read.
+    const test_server = @import("test_server.zig");
+    var server: test_server.TestServer = undefined;
+    try server.start(&.{
+        "HTTP/1.1 302 Found\r\nLocation: http://hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.example.com/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
     });
     defer server.stop();
 
