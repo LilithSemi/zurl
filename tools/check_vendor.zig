@@ -111,11 +111,9 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     }
 
-    std.debug.print(
-        "check-vendor: {s} differs from upstream in {d} hunks, and a marker accounts for every " ++
-            "changed line.\n",
-        .{ vendored_path, hunks.items.len },
-    );
+    // Silence is the success the build runner shows everywhere else. The
+    // run under `zig build test` prints nothing either, so a test report
+    // carries test results and nothing that reads like one.
     return 0;
 }
 

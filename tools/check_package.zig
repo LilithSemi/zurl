@@ -51,8 +51,6 @@ pub fn main(init: std.process.Init) !void {
         printLine(io, "check-package: {d} path(s) missing, so a consumer of this package would not get them\n", .{missing});
         return error.PackagePathsIncomplete;
     }
-
-    printLine(io, "check-package: {d} path(s) declared, {d} checked\n", .{ declared.len, required.len });
 }
 
 /// Prints one line to stdout, never to stderr.
