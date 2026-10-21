@@ -7,6 +7,14 @@
 //! This tool emits a certificate only when its trust row marks
 //! `CKA_TRUST_SERVER_AUTH` as `CKT_NSS_TRUSTED_DELEGATOR`.
 //!
+//! **Two refusals guard the link between the rows.** A second row under one
+//! label and serial is refused, because the pair is the whole join and a
+//! duplicate means it no longer decides anything. And a trust row that
+//! carries `CKA_CERT_SHA1_HASH` is checked against the SHA-1 of the
+//! certificate it is about to vouch for, so a drifted or corrupted
+//! `CKA_VALUE` cannot ride under a trust decision that was made about other
+//! bytes.
+//!
 //! `certdata.txt` is input from a build dependency, so malformed content is
 //! a runtime fault here, not a programmer error. Every read in this file
 //! checks its bound first, so a truncated or hand-edited file cannot make
@@ -70,7 +78,20 @@ const Object = struct {
     label: []const u8 = "",
     serial: []const u8 = "",
     value: []const u8 = "",
+    sha1: []const u8 = "",
     trust_server_auth: []const u8 = "",
+};
+
+/// Every fault `generate` can report beyond the allocator's own.
+pub const GenerateError = error{
+    /// A second row under one label and serial. The pair is the whole join
+    /// between a certificate and its trust decision, so a duplicate means
+    /// the join no longer decides anything and the run stops.
+    DuplicateRow,
+    /// A trust row carries `CKA_CERT_SHA1_HASH` and the hash of the
+    /// certificate it matched disagrees with it.
+    TrustHashMismatch,
+    OutOfMemory,
 };
 
 /// Parses `text` as `certdata.txt`, and appends one PEM block to `out` for
@@ -81,11 +102,11 @@ const Object = struct {
 /// function appends to `out`. Pass an arena, or another allocator whose
 /// memory the caller reclaims in one step: this function frees nothing on
 /// its own.
-pub fn generate(allocator: std.mem.Allocator, text: []const u8, out: *std.ArrayList(u8)) !usize {
+pub fn generate(allocator: std.mem.Allocator, text: []const u8, out: *std.ArrayList(u8)) GenerateError!usize {
     // Keyed by label and serial number, the same pair NSS uses to link a
     // certificate to its trust row.
     var certs: std.StringHashMap([]const u8) = .init(allocator);
-    var trusted_keys: std.StringHashMap(void) = .init(allocator);
+    var trusted_keys: std.StringHashMap([]const u8) = .init(allocator);
 
     var lines = std.mem.splitScalar(u8, text, '\n');
     var current: Object = .{};
@@ -106,6 +127,8 @@ pub fn generate(allocator: std.mem.Allocator, text: []const u8, out: *std.ArrayL
                 current.value = bytes;
             } else if (std.mem.eql(u8, field, "CKA_SERIAL_NUMBER")) {
                 current.serial = bytes;
+            } else if (std.mem.eql(u8, field, "CKA_CERT_SHA1_HASH")) {
+                current.sha1 = bytes;
             }
             continue;
         }
@@ -131,7 +154,15 @@ pub fn generate(allocator: std.mem.Allocator, text: []const u8, out: *std.ArrayL
     var emitted: usize = 0;
     var it = certs.iterator();
     while (it.next()) |entry| {
-        if (!trusted_keys.contains(entry.key_ptr.*)) continue;
+        const hash = trusted_keys.get(entry.key_ptr.*) orelse continue;
+        // The trust decision was made about one set of bytes, and the
+        // certificate this run emits has to be those bytes. NSS carries the
+        // SHA-1 of the certificate in its trust row for exactly this check.
+        if (hash.len != 0) {
+            var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
+            std.crypto.hash.Sha1.hash(entry.value_ptr.*, &digest, .{});
+            if (!std.mem.eql(u8, &digest, hash)) return error.TrustHashMismatch;
+        }
         try writePem(allocator, out, entry.key_ptr.*, entry.value_ptr.*);
         emitted += 1;
     }
@@ -140,24 +171,32 @@ pub fn generate(allocator: std.mem.Allocator, text: []const u8, out: *std.ArrayL
 
 /// Records `object` once its fields are complete: a certificate goes into
 /// `certs`, and a trust row that marks server auth as
-/// `CKT_NSS_TRUSTED_DELEGATOR` puts its key into `trusted_keys`. Every other
-/// object class is dropped, because this tool has no use for it.
+/// `CKT_NSS_TRUSTED_DELEGATOR` puts its key and its own `CKA_CERT_SHA1_HASH`
+/// into `trusted_keys`. Every other object class is dropped, because this
+/// tool has no use for it.
+///
+/// A second row under one key is a refusal and not an overwrite. The pair
+/// is the whole join between a certificate and its trust decision, and a
+/// duplicate means the file carries two different answers for one
+/// certificate, which no run can pick between.
 fn commit(
     allocator: std.mem.Allocator,
     certs: *std.StringHashMap([]const u8),
-    trusted_keys: *std.StringHashMap(void),
+    trusted_keys: *std.StringHashMap([]const u8),
     object: Object,
-) !void {
+) GenerateError!void {
     // A row with no label cannot be matched to anything, so it carries
     // nothing this tool can use.
     if (object.label.len == 0) return;
     const key = try std.fmt.allocPrint(allocator, "{s}\x00{x}", .{ object.label, object.serial });
     if (std.mem.eql(u8, object.class, "CKO_CERTIFICATE") and object.value.len > 0) {
+        if (certs.contains(key)) return error.DuplicateRow;
         try certs.put(key, object.value);
     } else if (std.mem.eql(u8, object.class, "CKO_NSS_TRUST") and
         std.mem.eql(u8, object.trust_server_auth, trusted_delegator))
     {
-        try trusted_keys.put(key, {});
+        if (trusted_keys.contains(key)) return error.DuplicateRow;
+        try trusted_keys.put(key, object.sha1);
     }
 }
 
@@ -360,4 +399,136 @@ test "an empty input emits nothing and does not fail" {
     const emitted = try generate(arena_state.allocator(), "", &out);
     try testing.expectEqual(@as(usize, 0), emitted);
     try testing.expectEqual(@as(usize, 0), out.items.len);
+}
+
+/// Formats `bytes` as the body of a `MULTILINE_OCTAL` block, three octets
+/// of text per octet of data, one source line per twelve bytes, the way
+/// NSS writes one.
+fn formatMultilineOctal(allocator: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (bytes, 0..) |byte, i| {
+        if (i > 0 and i % 12 == 0) try out.append(allocator, '\n');
+        var one: [4]u8 = undefined;
+        const printed = try std.fmt.bufPrint(&one, "\\{o:0>3}", .{byte});
+        try out.appendSlice(allocator, printed);
+    }
+    try out.append(allocator, '\n');
+    return out.items;
+}
+
+/// One trusted certificate with a trust row that carries the SHA-1 hash
+/// NSS writes beside its trust decision.
+fn certdataWithHash(allocator: std.mem.Allocator, cert_der: []const u8, hash: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(allocator,
+        \\CKA_CLASS CK_OBJECT_CLASS CKO_CERTIFICATE
+        \\CKA_LABEL UTF8 "Hashed CA"
+        \\CKA_SERIAL_NUMBER MULTILINE_OCTAL
+        \\{s}
+        \\END
+        \\CKA_VALUE MULTILINE_OCTAL
+        \\{s}
+        \\END
+        \\
+        \\CKA_CLASS CK_OBJECT_CLASS CKO_NSS_TRUST
+        \\CKA_LABEL UTF8 "Hashed CA"
+        \\CKA_SERIAL_NUMBER MULTILINE_OCTAL
+        \\{s}
+        \\END
+        \\CKA_CERT_SHA1_HASH MULTILINE_OCTAL
+        \\{s}
+        \\END
+        \\CKA_TRUST_SERVER_AUTH CK_TRUST CKT_NSS_TRUSTED_DELEGATOR
+        \\
+    , .{
+        try formatMultilineOctal(allocator, &.{1}),
+        try formatMultilineOctal(allocator, cert_der),
+        try formatMultilineOctal(allocator, &.{1}),
+        try formatMultilineOctal(allocator, hash),
+    });
+}
+
+test "a trust row whose hash matches the certificate emits it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+
+    const cert_der = "ABC";
+    var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
+    std.crypto.hash.Sha1.hash(cert_der, &digest, .{});
+    const text = try certdataWithHash(allocator, cert_der, &digest);
+
+    var out: std.ArrayList(u8) = .empty;
+    const emitted = try generate(allocator, text, &out);
+    try testing.expectEqual(@as(usize, 1), emitted);
+}
+
+test "a trust row whose hash disagrees with the certificate is refused" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+
+    // The trust decision was made about `ABC`, and the row the join picks
+    // carries `DEF`.
+    var wrong: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
+    std.crypto.hash.Sha1.hash("DEF", &wrong, .{});
+    const text = try certdataWithHash(allocator, "ABC", &wrong);
+
+    var out: std.ArrayList(u8) = .empty;
+    try testing.expectError(error.TrustHashMismatch, generate(allocator, text, &out));
+}
+
+test "a second certificate row under one label and serial is refused" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+
+    const text =
+        \\CKA_CLASS CK_OBJECT_CLASS CKO_CERTIFICATE
+        \\CKA_LABEL UTF8 "Twice"
+        \\CKA_SERIAL_NUMBER MULTILINE_OCTAL
+        \\\001
+        \\END
+        \\CKA_VALUE MULTILINE_OCTAL
+        \\\101
+        \\END
+        \\
+        \\CKA_CLASS CK_OBJECT_CLASS CKO_CERTIFICATE
+        \\CKA_LABEL UTF8 "Twice"
+        \\CKA_SERIAL_NUMBER MULTILINE_OCTAL
+        \\\001
+        \\END
+        \\CKA_VALUE MULTILINE_OCTAL
+        \\\102
+        \\END
+        \\
+    ;
+
+    var out: std.ArrayList(u8) = .empty;
+    try testing.expectError(error.DuplicateRow, generate(allocator, text, &out));
+}
+
+test "a second trust row under one label and serial is refused" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+
+    const text =
+        \\CKA_CLASS CK_OBJECT_CLASS CKO_NSS_TRUST
+        \\CKA_LABEL UTF8 "Twice"
+        \\CKA_SERIAL_NUMBER MULTILINE_OCTAL
+        \\\001
+        \\END
+        \\CKA_TRUST_SERVER_AUTH CK_TRUST CKT_NSS_TRUSTED_DELEGATOR
+        \\
+        \\CKA_CLASS CK_OBJECT_CLASS CKO_NSS_TRUST
+        \\CKA_LABEL UTF8 "Twice"
+        \\CKA_SERIAL_NUMBER MULTILINE_OCTAL
+        \\\001
+        \\END
+        \\CKA_TRUST_SERVER_AUTH CK_TRUST CKT_NSS_TRUSTED_DELEGATOR
+        \\
+    ;
+
+    var out: std.ArrayList(u8) = .empty;
+    try testing.expectError(error.DuplicateRow, generate(allocator, text, &out));
 }
