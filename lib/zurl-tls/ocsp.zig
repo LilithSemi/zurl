@@ -624,15 +624,19 @@ fn writeLen(out: []u8, body: usize) void {
 const Fixture = struct {
     root_key: TestEcdsa.KeyPair,
     responder_key: ?TestEcdsa.KeyPair = null,
-    root_buf: Client.DerBuf,
-    leaf_buf: Client.DerBuf,
+    // The DER each parsed certificate points into, owned by the fixture,
+    // for the reason `init` gives.
+    root_der: []u8,
+    leaf_der: []u8,
     responder_buf: Client.DerBuf = .{},
     root: Certificate.Parsed,
     leaf: Certificate.Parsed,
     // The DER of the leaf's serial, copied, so a verify never reads a
-    // fixture buffer through a pointer into another one.
+    // fixture buffer through a pointer into another one. The length rides
+    // beside it, because a slice into `storage` would point at `init`'s
+    // own copy of this struct, which is gone by the time a test reads it.
     leaf_serial_storage: [8]u8,
-    leaf_serial: []const u8,
+    leaf_serial_len: usize = 0,
     /// The `SingleResponse` bytes, held apart so a test can mint a
     /// response around a different one.
     single: Der,
@@ -666,8 +670,16 @@ const Fixture = struct {
             .key_usage = .digital_signature,
         }, leaf_key.public_key, root_key);
 
-        const root_cert: Certificate = .{ .buffer = root_buf.slice(), .index = 0 };
-        const leaf_cert: Certificate = .{ .buffer = leaf_buf.slice(), .index = 0 };
+        // The copies outlive `init`, so the parsed certificates read bytes
+        // that stay where they are. A `DerBuf` that moved with the fixture
+        // would leave every pointer in `root` and `leaf` at the stack frame
+        // `init` had when it built them.
+        const root_der = try testing.allocator.dupe(u8, root_buf.slice());
+        errdefer testing.allocator.free(root_der);
+        const leaf_der = try testing.allocator.dupe(u8, leaf_buf.slice());
+        errdefer testing.allocator.free(leaf_der);
+        const root_cert: Certificate = .{ .buffer = root_der, .index = 0 };
+        const leaf_cert: Certificate = .{ .buffer = leaf_der, .index = 0 };
         const root = try Certificate.parse(root_cert);
         const leaf = try Certificate.parse(leaf_cert);
 
@@ -679,24 +691,30 @@ const Fixture = struct {
 
         var fixture = Fixture{
             .root_key = root_key,
-            .root_buf = root_buf,
-            .leaf_buf = leaf_buf,
+            .root_der = root_der,
+            .leaf_der = leaf_der,
             .root = root,
             .leaf = leaf,
             .leaf_serial_storage = undefined,
-            .leaf_serial = &.{},
+            .leaf_serial_len = 0,
             .single = single,
             .response = response,
         };
         const serial_slice = try certificate.serial(leaf_cert);
         const serial_der = leaf_cert.buffer[serial_slice.start..serial_slice.end];
         @memcpy(fixture.leaf_serial_storage[0..serial_der.len], serial_der);
-        fixture.leaf_serial = fixture.leaf_serial_storage[0..serial_der.len];
+        fixture.leaf_serial_len = serial_der.len;
         return fixture;
+    }
+
+    fn leafSerial(fixture: *const Fixture) []const u8 {
+        return fixture.leaf_serial_storage[0..fixture.leaf_serial_len];
     }
 
     fn deinit(fixture: *Fixture) void {
         testing.allocator.free(fixture.response);
+        testing.allocator.free(fixture.root_der);
+        testing.allocator.free(fixture.leaf_der);
     }
 };
 
@@ -820,7 +838,7 @@ fn wrapBody(out: *Der, from: usize, tag: u8) void {
 test "a good response signed by the issuer verifies" {
     var fixture = try Fixture.init();
     defer fixture.deinit();
-    try verify(fixture.response, fixture.leaf_serial, fixture.root, test_now_sec);
+    try verify(fixture.response, fixture.leafSerial(), fixture.root, test_now_sec);
 }
 
 test "a response for another serial says nothing about the leaf" {
@@ -834,7 +852,7 @@ test "a response for another serial says nothing about the leaf" {
     defer testing.allocator.free(response);
     try testing.expectError(
         error.TlsCertificateStatusInvalid,
-        verify(response, fixture.leaf_serial, fixture.root, test_now_sec),
+        verify(response, fixture.leafSerial(), fixture.root, test_now_sec),
     );
 }
 
@@ -847,7 +865,7 @@ test "a revoked response is revoked and not merely invalid" {
     defer testing.allocator.free(response);
     try testing.expectError(
         error.TlsCertificateStatusRevoked,
-        verify(response, fixture.leaf_serial, fixture.root, test_now_sec),
+        verify(response, fixture.leafSerial(), fixture.root, test_now_sec),
     );
 }
 
@@ -860,7 +878,7 @@ test "an unknown status is invalid" {
     defer testing.allocator.free(response);
     try testing.expectError(
         error.TlsCertificateStatusInvalid,
-        verify(response, fixture.leaf_serial, fixture.root, test_now_sec),
+        verify(response, fixture.leafSerial(), fixture.root, test_now_sec),
     );
 }
 
@@ -869,7 +887,7 @@ test "a response whose window has passed is invalid" {
     defer fixture.deinit();
     try testing.expectError(
         error.TlsCertificateStatusInvalid,
-        verify(fixture.response, fixture.leaf_serial, fixture.root, test_now_sec + 2 * 366 * 86400),
+        verify(fixture.response, fixture.leafSerial(), fixture.root, test_now_sec + 2 * 366 * 86400),
     );
 }
 
@@ -878,7 +896,7 @@ test "a response produced in the future is invalid" {
     defer fixture.deinit();
     try testing.expectError(
         error.TlsCertificateStatusInvalid,
-        verify(fixture.response, fixture.leaf_serial, fixture.root, test_now_sec - 2 * 366 * 86400),
+        verify(fixture.response, fixture.leafSerial(), fixture.root, test_now_sec - 2 * 366 * 86400),
     );
 }
 
@@ -890,7 +908,7 @@ test "a response signed by another key is refused" {
     defer testing.allocator.free(response);
     try testing.expectError(
         error.CertificateSignatureInvalid,
-        verify(response, fixture.leaf_serial, fixture.root, test_now_sec),
+        verify(response, fixture.leafSerial(), fixture.root, test_now_sec),
     );
 }
 
@@ -912,7 +930,7 @@ test "a response that names another issuer says nothing about the leaf" {
 
     try testing.expectError(
         error.TlsCertificateStatusInvalid,
-        verify(fixture.response, fixture.leaf_serial, other_parsed, test_now_sec),
+        verify(fixture.response, fixture.leafSerial(), other_parsed, test_now_sec),
     );
 }
 
@@ -940,7 +958,7 @@ test "a delegated responder the issuer signed and gave the purpose to signs" {
     try writeSingle(&single, fixture.root, fixture.leaf, .good);
     const response = try buildDelegated(testing.allocator, responder, responder_key, single.slice());
     defer testing.allocator.free(response);
-    try verify(response, fixture.leaf_serial, fixture.root, test_now_sec);
+    try verify(response, fixture.leafSerial(), fixture.root, test_now_sec);
 }
 
 test "a delegated responder without the purpose is refused" {
@@ -968,7 +986,7 @@ test "a delegated responder without the purpose is refused" {
     defer testing.allocator.free(response);
     try testing.expectError(
         error.TlsCertificateStatusInvalid,
-        verify(response, fixture.leaf_serial, fixture.root, test_now_sec),
+        verify(response, fixture.leafSerial(), fixture.root, test_now_sec),
     );
 }
 

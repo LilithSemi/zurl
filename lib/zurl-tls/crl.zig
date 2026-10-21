@@ -459,18 +459,29 @@ fn writeLen(out: []u8, body: usize) void {
 /// `CertificateList` that revokes `revoked`.
 const Fixture = struct {
     root_key: TestEcdsa.KeyPair,
-    root_buf: Client.DerBuf,
-    leaf_buf: Client.DerBuf,
+    // The DER each parsed certificate points into. The fixture owns both
+    // copies, because a `DerBuf` that moves with this struct would leave
+    // every pointer in `root` and `leaf` at the stack frame `init` had
+    // when it built them.
+    root_der: []u8,
+    leaf_der: []u8,
     root: Certificate.Parsed,
     leaf: Certificate.Parsed,
     // The DER of the leaf's serial, copied, so a check never reads a
-    // fixture buffer through a pointer into another one.
+    // fixture buffer through a pointer into another one. The length
+    // rides beside it, because a slice into `storage` would point at
+    // `init`'s own copy of this struct, which is gone by the time a
+    // test reads it.
     leaf_serial_storage: [8]u8,
-    leaf_serial: []const u8,
+    leaf_serial_len: usize = 0,
     list_der: Der,
     list: List,
 
     const issuer_cn = "crl test root";
+
+    fn leafSerial(fixture: *const Fixture) []const u8 {
+        return fixture.leaf_serial_storage[0..fixture.leaf_serial_len];
+    }
 
     fn init(revoked: []const u8) !Fixture {
         const root_key = try Client.testKey(0x81);
@@ -496,8 +507,14 @@ const Fixture = struct {
             .key_usage = .digital_signature,
         }, leaf_key.public_key, root_key);
 
-        const root_cert: Certificate = .{ .buffer = root_buf.slice(), .index = 0 };
-        const leaf_cert: Certificate = .{ .buffer = leaf_buf.slice(), .index = 0 };
+        // The copies outlive `init`, so the parsed certificates read bytes
+        // that stay where they are.
+        const root_der = try testing.allocator.dupe(u8, root_buf.slice());
+        errdefer testing.allocator.free(root_der);
+        const leaf_der = try testing.allocator.dupe(u8, leaf_buf.slice());
+        errdefer testing.allocator.free(leaf_der);
+        const root_cert: Certificate = .{ .buffer = root_der, .index = 0 };
+        const leaf_cert: Certificate = .{ .buffer = leaf_der, .index = 0 };
         const root = try Certificate.parse(root_cert);
         const leaf = try Certificate.parse(leaf_cert);
 
@@ -508,28 +525,30 @@ const Fixture = struct {
 
         var fixture = Fixture{
             .root_key = root_key,
-            .root_buf = root_buf,
-            .leaf_buf = leaf_buf,
+            .root_der = root_der,
+            .leaf_der = leaf_der,
             .root = root,
             .leaf = leaf,
             .leaf_serial_storage = undefined,
-            .leaf_serial = &.{},
+            .leaf_serial_len = 0,
             .list_der = list_der,
             .list = list,
         };
         const serial_slice = try certificate.serial(leaf_cert);
         const serial_der = leaf_cert.buffer[serial_slice.start..serial_slice.end];
         @memcpy(fixture.leaf_serial_storage[0..serial_der.len], serial_der);
-        fixture.leaf_serial = fixture.leaf_serial_storage[0..serial_der.len];
+        fixture.leaf_serial_len = serial_der.len;
         return fixture;
     }
 
     fn deinit(fixture: *Fixture) void {
         fixture.list.deinit();
+        testing.allocator.free(fixture.root_der);
+        testing.allocator.free(fixture.leaf_der);
     }
 
     fn checkLeaf(fixture: *Fixture) CheckError!void {
-        return fixture.list.check(fixture.leaf_serial, fixture.root, test_now_sec);
+        return fixture.list.check(fixture.leafSerial(), fixture.root, test_now_sec);
     }
 };
 
@@ -606,7 +625,7 @@ test "a list signed by another authority is refused" {
 
     try testing.expectError(
         error.TlsCrlUntrusted,
-        fixture.list.check(fixture.leaf_serial, other_parsed, test_now_sec),
+        fixture.list.check(fixture.leafSerial(), other_parsed, test_now_sec),
     );
 }
 
@@ -615,7 +634,7 @@ test "a list whose window has passed is refused" {
     defer fixture.deinit();
     var stale = fixture.list;
     stale.next_update = test_now_sec - 1;
-    try testing.expectError(error.TlsCrlOutOfDate, stale.check(fixture.leaf_serial, fixture.root, test_now_sec));
+    try testing.expectError(error.TlsCrlOutOfDate, stale.check(fixture.leafSerial(), fixture.root, test_now_sec));
 }
 
 test "a list whose window has not begun is refused" {
@@ -623,7 +642,7 @@ test "a list whose window has not begun is refused" {
     defer fixture.deinit();
     var early = fixture.list;
     early.this_update = test_now_sec + 1;
-    try testing.expectError(error.TlsCrlOutOfDate, early.check(fixture.leaf_serial, fixture.root, test_now_sec));
+    try testing.expectError(error.TlsCrlOutOfDate, early.check(fixture.leafSerial(), fixture.root, test_now_sec));
 }
 
 test "a list with no nextUpdate is refused" {
@@ -631,7 +650,7 @@ test "a list with no nextUpdate is refused" {
     defer fixture.deinit();
     var open_ended = fixture.list;
     open_ended.next_update = null;
-    try testing.expectError(error.TlsCrlOutOfDate, open_ended.check(fixture.leaf_serial, fixture.root, test_now_sec));
+    try testing.expectError(error.TlsCrlOutOfDate, open_ended.check(fixture.leafSerial(), fixture.root, test_now_sec));
 }
 
 test "a list that does not name its issuer's subject is refused" {
@@ -639,7 +658,7 @@ test "a list that does not name its issuer's subject is refused" {
     defer fixture.deinit();
     var renamed = fixture.list;
     renamed.issuer = renamed.issuer[1..];
-    try testing.expectError(error.TlsCrlUntrusted, renamed.check(fixture.leaf_serial, fixture.root, test_now_sec));
+    try testing.expectError(error.TlsCrlUntrusted, renamed.check(fixture.leafSerial(), fixture.root, test_now_sec));
 }
 
 test "a signature over other bytes than the list carries is refused" {
@@ -647,7 +666,7 @@ test "a signature over other bytes than the list carries is refused" {
     defer fixture.deinit();
     var forged = fixture.list;
     forged.tbs = forged.tbs[0 .. forged.tbs.len - 1];
-    try testing.expectError(error.CertificateSignatureInvalid, forged.check(fixture.leaf_serial, fixture.root, test_now_sec));
+    try testing.expectError(error.CertificateSignatureInvalid, forged.check(fixture.leafSerial(), fixture.root, test_now_sec));
 }
 
 test "a pem envelope decodes to the list the der form carries" {
