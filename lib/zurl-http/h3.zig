@@ -52,6 +52,7 @@ const zurl_qpack = @import("zurl-qpack");
 const zurl_quic = @import("zurl-quic");
 const engine = @import("engine.zig");
 const quic = @import("quic.zig");
+const zurl_tls = @import("zurl-tls"); // ZURL PATCH: the revocation list type of `--crlfile`.
 
 const h3_frame = zurl_h3.frame;
 const testing = std.testing;
@@ -480,6 +481,8 @@ pub const Session = struct {
             .host = options.host,
             .verify_host = options.verify_host,
             .trust = options.trust,
+            .require_staple = options.require_staple, // ZURL PATCH
+            .crl = options.crl, // ZURL PATCH
             .alpn = &.{alpn_name},
             .slots = slots,
             .recv_window = connection_window_len,
@@ -526,6 +529,12 @@ pub const Session = struct {
         host: []const u8,
         verify_host: bool,
         trust: quic.Trust,
+        /// Whether the session asks for a stapled OCSP response. This is
+        /// `--cert-status` on the HTTP/3 transport.
+        require_staple: bool = false, // ZURL PATCH
+        /// The revocation list the leaf of the peer chain is checked
+        /// against. This is `--crlfile` on the HTTP/3 transport.
+        crl: ?*const zurl_tls.crl.List = null, // ZURL PATCH
         /// How long the QUIC handshake may take, in milliseconds. The
         /// caller's `--connect-timeout` when there is one, because a
         /// handshake is how this transport reaches a peer.

@@ -1421,6 +1421,18 @@ pub const Request = struct {
     /// `h1.Origin`: a connection opened with no verification can never
     /// answer a request that asked for verification.
     insecure: bool = false,
+    /// Whether a TLS hop asks the peer for a stapled OCSP response and
+    /// refuses the connection when none arrives or when the one that
+    /// arrives does not vouch for the leaf. This is `--cert-status`.
+    ///
+    /// **False is the default, and `-k` turns the ask off with the rest
+    /// of the verification.** A staple anchors on the issuer of the leaf,
+    /// which a session that verifies nothing has none of.
+    ///
+    /// This value is part of a pooled connection's identity, because the
+    /// ask is made once, in the client hello, and cannot be made again on
+    /// an open session. See `h1.Origin`.
+    cert_status: bool = false,
     /// Whether to turn Nagle's algorithm off on a new connection. This is
     /// `--no-tcp-nodelay`, which gives false.
     ///
@@ -1690,6 +1702,16 @@ pub const OpenError = error{
     /// A certificate file the caller named could not be read as
     /// certificates. `TlsSetup` reports this.
     CaCertBadFile,
+    /// A revocation list the caller named could not be read as a
+    /// certificate revocation list. This is curl's `--crlfile` refusing a
+    /// file, and it keeps its own name beside `CaCertBadFile` because curl
+    /// gives the two different exit codes: 77 and 82.
+    CrlBadFile,
+    /// The certificate status of the peer did not verify. `--cert-status`
+    /// asked for a stapled OCSP response and the one that arrived was
+    /// missing, malformed, stale, or said revoked. This is curl's exit 91,
+    /// kept apart from `PeerFailedVerification` for the same reason.
+    SslInvalidCertStatus,
     /// A read from the peer did not succeed, including a response that does
     /// not parse as HTTP.
     ReadError,
@@ -1923,7 +1945,7 @@ pub const Exchange = struct {
 /// certificate directory the caller named could not be scanned. A
 /// handshake with no roots cannot verify the peer, so one of these three
 /// is the fault the caller must see.
-pub const TlsSetupError = error{ SslConnectError, PeerFailedVerification, CaCertBadFile, OutOfMemory };
+pub const TlsSetupError = error{ SslConnectError, PeerFailedVerification, CaCertBadFile, CrlBadFile, OutOfMemory };
 
 /// What an engine calls before each hop that speaks TLS, so the owner of
 /// the engine can make the trust store ready.

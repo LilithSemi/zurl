@@ -34,6 +34,7 @@
 const std = @import("std");
 const zurl_core = @import("zurl-core");
 const zurl_net = @import("zurl-net");
+const zurl_tls = @import("zurl-tls"); // ZURL PATCH: the revocation list type of `--crlfile`.
 const engine = @import("engine.zig");
 /// The HTTP/2 half of the engine.
 ///
@@ -547,6 +548,13 @@ pub const Engine = struct {
     /// connection to a proxy.
     proxy_ca_bundle: std.crypto.Certificate.Bundle,
     proxy_ca_bundle_lock: std.Io.RwLock,
+    /// The revocation list the leaf of every peer chain is checked
+    /// against, which `--crlfile` names. The engine loads none of this:
+    /// `tls_setup` names the owner that does, at the same moment it fills
+    /// `ca_bundle`, and every handshake borrows the list for the length of
+    /// the check and never after. Null checks nothing, which is what a
+    /// transfer that named no list gets.
+    crl: ?*const zurl_tls.crl.List = null, // ZURL PATCH
     /// How much room each connection keeps for bytes that arrived and were
     /// not read yet, which is what bounds a whole response head.
     ///
@@ -1251,6 +1259,14 @@ const Origin = struct {
     /// an open session. A pooled connection that negotiated a protocol
     /// would otherwise answer a later request that asked for none.
     no_alpn: bool,
+    /// Whether the handshake that opened this connection asked for a
+    /// stapled OCSP response. This is `engine.Request.cert_status`.
+    ///
+    /// Part of the identity for the same reason `no_alpn` is: the ask is
+    /// made once, in the client hello, and cannot be made again on an
+    /// open session. A pooled connection that got no staple would
+    /// otherwise answer a later request that asked for one.
+    cert_status: bool, // ZURL PATCH
     /// Which HTTP versions the ALPN offer of this connection named. This is
     /// `engine.Request.http_version`.
     ///
@@ -1374,6 +1390,7 @@ const Origin = struct {
             .insecure = req.insecure,
             .no_delay = req.tcp_no_delay,
             .no_alpn = req.no_alpn,
+            .cert_status = req.cert_status, // ZURL PATCH
             .http_version = req.http_version,
             .host_storage = undefined,
             .host_len = host_text.len,
@@ -1431,6 +1448,7 @@ const Origin = struct {
         // and `http_version`: whether the extension went out at all, and
         // which names it carried, are both part of the session.
         if (a.no_alpn != b.no_alpn) return false;
+        if (a.cert_status != b.cert_status) return false; // ZURL PATCH
         if (a.http_version != b.http_version) return false;
         // The peer the socket reaches, and not only the host the url
         // names. See `dial_storage`.
@@ -2367,6 +2385,8 @@ fn openErrorFor(err: zurl_core.Error) ?engine.OpenError {
         error.SslConnectError => error.SslConnectError,
         error.PeerFailedVerification => error.PeerFailedVerification,
         error.CaCertBadFile => error.CaCertBadFile,
+        error.CrlBadFile => error.CrlBadFile,
+        error.SslInvalidCertStatus => error.SslInvalidCertStatus,
         error.ReadError => error.ReadError,
         error.WriteError => error.WriteError,
         error.OutOfMemory => error.OutOfMemory,
@@ -2490,6 +2510,7 @@ fn tlsSetup(
     req: engine.Request,
     lock: *std.Io.RwLock,
     bundle: *std.crypto.Certificate.Bundle,
+    crl_list: ?*const zurl_tls.crl.List, // ZURL PATCH: the list `--crlfile` named, which the chain walk checks.
 ) zurl_net.Connection.Tls {
     return .{
         .host = if (req.insecure) .none else .{ .explicit = req.url.host },
@@ -2499,6 +2520,13 @@ fn tlsSetup(
             .lock = lock,
             .bundle = bundle,
         } },
+        // ZURL PATCH: the revocation asks. Both ride with the trust
+        // ZURL PATCH: check: a staple anchors on the issuer of the leaf
+        // ZURL PATCH: and a list vouches for a certificate somebody
+        // ZURL PATCH: signed, so a session that verifies nothing has no
+        // ZURL PATCH: use for either.
+        .require_staple = req.cert_status and !req.insecure, // ZURL PATCH
+        .crl = if (req.insecure) null else crl_list, // ZURL PATCH
         // **The end of a socket is not the end of a stream, and this
         // engine no longer says it is.** It used to set
         // `allow_truncation_attacks`, with the reason that HTTP carries
@@ -4653,6 +4681,7 @@ const Exchange = struct {
                     req,
                     &engine_state.ca_bundle_lock,
                     &engine_state.ca_bundle,
+                    engine_state.crl, // ZURL PATCH
                 ),
                 .proxy => proxyTlsSetup(
                     req,
@@ -6141,6 +6170,11 @@ fn connectH3(
             .lock = &engine_state.ca_bundle_lock,
             .bundle = &engine_state.ca_bundle,
         } },
+        // ZURL PATCH: the revocation asks, which the QUIC handshake
+        // ZURL PATCH: carries to the same chain walk the TCP session
+        // ZURL PATCH: uses.
+        .require_staple = req.cert_status and !req.insecure, // ZURL PATCH
+        .crl = engine_state.crl, // ZURL PATCH
         .handshake_timeout_ms = h3HandshakeMs(engine_state),
         // **The bound on one wait after the handshake.** A QUIC peer that
         // completed the handshake and then went quiet met nothing at all
@@ -12774,7 +12808,7 @@ test "a request verifies the peer unless it asked not to" {
     // **The default verifies.** Nothing in the request said otherwise, so
     // the chain must reach a root in the bundle and the certificate must
     // carry the host the url names.
-    const verifying = tlsSetup(base, &lock, &bundle);
+    const verifying = tlsSetup(base, &lock, &bundle, null);
     try testing.expectEqualStrings("example.com", verifying.host.explicit);
     try testing.expectEqual(&bundle, verifying.trust.bundle.bundle);
     try testing.expectEqual(&lock, verifying.trust.bundle.lock);
@@ -12788,7 +12822,7 @@ test "a request verifies the peer unless it asked not to" {
     loaded.redirects = .{ .follow = 5 };
     loaded.trusted_secrets = true;
     loaded.tcp_no_delay = false;
-    const still_verifying = tlsSetup(loaded, &lock, &bundle);
+    const still_verifying = tlsSetup(loaded, &lock, &bundle, null);
     try testing.expectEqualStrings("example.com", still_verifying.host.explicit);
     try testing.expectEqual(&bundle, still_verifying.trust.bundle.bundle);
 
@@ -12803,7 +12837,7 @@ test "a request verifies the peer unless it asked not to" {
     // HTTP/2 and the transfer takes the path it always took.
     var older = base;
     older.http_version = .http_1_1;
-    const one = tlsSetup(older, &lock, &bundle);
+    const one = tlsSetup(older, &lock, &bundle, null);
     try testing.expectEqual(@as(usize, 1), one.alpn_protocols.len);
     try testing.expectEqualStrings("http/1.1", one.alpn_protocols[0]);
 
@@ -12812,7 +12846,7 @@ test "a request verifies the peer unless it asked not to" {
     // `upgradeOffer`.
     var two = base;
     two.http_version = .http_2;
-    const both = tlsSetup(two, &lock, &bundle);
+    const both = tlsSetup(two, &lock, &bundle, null);
     try testing.expectEqual(@as(usize, 2), both.alpn_protocols.len);
     try testing.expectEqualStrings("h2", both.alpn_protocols[0]);
     try testing.expectEqualStrings("http/1.1", both.alpn_protocols[1]);
@@ -12825,7 +12859,7 @@ test "a request verifies the peer unless it asked not to" {
     // this flag, and exited 0 on HTTP/1.1 for `--http2`.
     var prior = base;
     prior.http_version = .prior_knowledge;
-    const demanded = tlsSetup(prior, &lock, &bundle);
+    const demanded = tlsSetup(prior, &lock, &bundle, null);
     try testing.expectEqual(@as(usize, 1), demanded.alpn_protocols.len);
     try testing.expectEqualStrings("h2", demanded.alpn_protocols[0]);
 
@@ -12838,14 +12872,14 @@ test "a request verifies the peer unless it asked not to" {
     // `ALPN: curl offers h2,http/1.1` on the TCP hop it fell back to.
     var three = base;
     three.http_version = .http_3;
-    const fallback = tlsSetup(three, &lock, &bundle);
+    const fallback = tlsSetup(three, &lock, &bundle, null);
     try testing.expectEqual(@as(usize, 2), fallback.alpn_protocols.len);
     try testing.expectEqualStrings("h2", fallback.alpn_protocols[0]);
     try testing.expectEqualStrings("http/1.1", fallback.alpn_protocols[1]);
 
     var three_only = base;
     three_only.http_version = .http_3_only;
-    const only = tlsSetup(three_only, &lock, &bundle);
+    const only = tlsSetup(three_only, &lock, &bundle, null);
     try testing.expectEqual(@as(usize, 2), only.alpn_protocols.len);
     try testing.expectEqualStrings("h2", only.alpn_protocols[0]);
 
@@ -12855,7 +12889,7 @@ test "a request verifies the peer unless it asked not to" {
     for (std.enums.values(engine.HttpVersion)) |version| {
         var any_flag = base;
         any_flag.http_version = version;
-        for (tlsSetup(any_flag, &lock, &bundle).alpn_protocols) |name| {
+        for (tlsSetup(any_flag, &lock, &bundle, null).alpn_protocols) |name| {
             try testing.expect(!std.mem.eql(u8, name, "h3"));
         }
     }
@@ -12865,20 +12899,20 @@ test "a request verifies the peer unless it asked not to" {
     // hop is HTTP/1.1 too.
     var quiet = base;
     quiet.no_alpn = true;
-    try testing.expectEqual(@as(usize, 0), tlsSetup(quiet, &lock, &bundle).alpn_protocols.len);
+    try testing.expectEqual(@as(usize, 0), tlsSetup(quiet, &lock, &bundle, null).alpn_protocols.len);
 
     // `--no-alpn` wins over `--http1.1`, because an empty list is already
     // the narrowest offer there is.
     var quiet_older = base;
     quiet_older.no_alpn = true;
     quiet_older.http_version = .http_1_1;
-    try testing.expectEqual(@as(usize, 0), tlsSetup(quiet_older, &lock, &bundle).alpn_protocols.len);
+    try testing.expectEqual(@as(usize, 0), tlsSetup(quiet_older, &lock, &bundle, null).alpn_protocols.len);
 
     // **Only the flag reaches the other answer, and it turns off both
     // halves.**
     var unverified = base;
     unverified.insecure = true;
-    const skipping = tlsSetup(unverified, &lock, &bundle);
+    const skipping = tlsSetup(unverified, &lock, &bundle, null);
     try testing.expectEqual(zurl_net.Connection.HostCheck.none, skipping.host);
     try testing.expectEqual(zurl_net.Connection.TrustCheck.none, skipping.trust);
 }
@@ -13578,7 +13612,7 @@ test "--resolve moves the dial and never the name the certificate is checked aga
     try testing.expect(target.overridden);
 
     // The certificate: the host the url wrote, and nothing the flag said.
-    const setup = tlsSetup(req, &http_engine.ca_bundle_lock, &http_engine.ca_bundle);
+    const setup = tlsSetup(req, &http_engine.ca_bundle_lock, &http_engine.ca_bundle, null);
     try testing.expectEqualStrings("example.com", setup.host.explicit);
     // And the roots are still the ones the owner loaded, so the chain
     // still has to reach a trusted root as well as carry the name.
@@ -13588,7 +13622,7 @@ test "--resolve moves the dial and never the name the certificate is checked aga
     // beside it changes neither answer.
     var unverified = req;
     unverified.insecure = true;
-    const open_setup = tlsSetup(unverified, &http_engine.ca_bundle_lock, &http_engine.ca_bundle);
+    const open_setup = tlsSetup(unverified, &http_engine.ca_bundle_lock, &http_engine.ca_bundle, null);
     try testing.expect(open_setup.host == .none);
     try testing.expect(open_setup.trust == .none);
 }
@@ -13625,7 +13659,7 @@ test "the hop to a proxy carries the tls version bounds the transfer named" {
     try testing.expect(setup.trust == .bundle);
 
     // And the same two bounds `tlsSetup` gives the origin.
-    const origin = tlsSetup(req, &http_engine.ca_bundle_lock, &http_engine.ca_bundle);
+    const origin = tlsSetup(req, &http_engine.ca_bundle_lock, &http_engine.ca_bundle, null);
     try testing.expectEqual(origin.min_version, setup.min_version);
     try testing.expectEqual(origin.max_version, setup.max_version);
     try testing.expectEqual(req.tls_min_version, setup.min_version);

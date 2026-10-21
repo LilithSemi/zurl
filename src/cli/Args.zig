@@ -2343,9 +2343,9 @@ pub const flag_table = [_]Flag{
     .{ .id = .ipfs_gateway, .long = "ipfs-gateway", .takes_value = true, .arg = "<url>", .help = "Refused. This build reads no ipfs:// or ipns:// url." },
 
     // Flags refused by name. TLS controls with nothing behind them.
-    .{ .id = .cert_status, .long = "cert-status", .help = "Refused. This build asks for no OCSP staple and checks none." },
-    .{ .id = .crlfile, .long = "crlfile", .takes_value = true, .arg = "<path>", .help = "Refused. This build checks no revocation list." },
-    .{ .id = .proxy_crlfile, .long = "proxy-crlfile", .takes_value = true, .arg = "<path>", .help = "Refused. This build checks no revocation list." },
+    .{ .id = .cert_status, .long = "cert-status", .help = "Ask for a stapled OCSP response and verify it. Refuses the peer when none arrives, when it does not vouch for the certificate, or when it says the certificate is revoked." },
+    .{ .id = .crlfile, .long = "crlfile", .takes_value = true, .arg = "<path>", .help = "A PEM or DER file of certificate revocation lists. The peer certificate is refused when the list its issuer signed revokes it." },
+    .{ .id = .proxy_crlfile, .long = "proxy-crlfile", .takes_value = true, .arg = "<path>", .help = "Refused. The origin connection checks the list --crlfile names; the hop to an https proxy checks none." },
     .{ .id = .pinnedpubkey, .long = "pinnedpubkey", .takes_value = true, .arg = "<hashes>", .help = "Refused. This build reads back no peer public key to pin." },
     .{ .id = .proxy_pinnedpubkey, .long = "proxy-pinnedpubkey", .takes_value = true, .arg = "<hashes>", .help = "Refused. This build reads back no peer public key to pin." },
     .{ .id = .sigalgs, .long = "sigalgs", .takes_value = true, .arg = "<list>", .help = "Refused. This build offers one fixed signature algorithm list." },
@@ -3457,9 +3457,9 @@ fn applyEffect(
         .vlan_priority => refuse(b, "--vlan-priority", packet_marking_reason),
         .ipfs_gateway => refuse(b, "--ipfs-gateway", ipfs_reason),
 
-        .cert_status => refuse(b, "--cert-status", revocation_reason),
-        .crlfile => refuse(b, "--crlfile", revocation_reason),
-        .proxy_crlfile => refuse(b, "--proxy-crlfile", revocation_reason),
+        .cert_status => b.options.cert_status = true, // ZURL PATCH: the staple ask rides on the transfer, like the verification flags.
+        .crlfile => b.options.crlfile = value, // ZURL PATCH
+        .proxy_crlfile => refuse(b, "--proxy-crlfile", proxy_revocation_reason),
         .pinnedpubkey => refuse(b, "--pinnedpubkey", pinning_reason),
         .proxy_pinnedpubkey => refuse(b, "--proxy-pinnedpubkey", pinning_reason),
         .sigalgs => refuse(b, "--sigalgs", sigalgs_reason),
@@ -3623,6 +3623,16 @@ const ipfs_reason =
 /// Why `--cert-status`, `--crlfile`, and `--proxy-crlfile` are refused.
 const revocation_reason =
     "this build checks no certificate revocation, so a revoked certificate would still verify";
+
+/// Why `--proxy-crlfile` is refused.
+///
+/// The origin connection checks the list `--crlfile` names, and this
+/// option would name a second list for the hop to an `https` proxy. That
+/// hop runs its own handshake with its own roots, and no second list
+/// reaches it in this build, so the option would say one thing and mean
+/// nothing.
+const proxy_revocation_reason =
+    "this build checks a revocation list on the origin connection alone";
 
 /// Why `--pinnedpubkey` and `--proxy-pinnedpubkey` are refused.
 const pinning_reason =

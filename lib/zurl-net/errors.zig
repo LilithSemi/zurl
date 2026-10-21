@@ -192,6 +192,42 @@ const rows = [_]Row{
         .mapped = error.PeerFailedVerification,
         .message = "the peer certificate chain reaches no trusted root",
     },
+    // ZURL PATCH: the revocation checks. curl separates a certificate
+    // ZURL PATCH: the list revokes, which is a verification failure, from
+    // ZURL PATCH: a staple that is missing or worthless, which is
+    // ZURL PATCH: `CURLE_SSL_INVALIDCERTSTATUS` and exit 91. The mapping
+    // ZURL PATCH: below keeps the same split, and the two staple names
+    // ZURL PATCH: need `SslInvalidCertStatus` in `zurl-core`.
+    .{
+        .err = error.TlsCertificateRevoked,
+        .mapped = error.PeerFailedVerification,
+        .message = "the peer certificate is on the revocation list it was given",
+    },
+    .{
+        .err = error.TlsCrlUntrusted,
+        .mapped = error.PeerFailedVerification,
+        .message = "the revocation list does not vouch for a certificate the peer chain signed",
+    },
+    .{
+        .err = error.TlsCrlOutOfDate,
+        .mapped = error.PeerFailedVerification,
+        .message = "the revocation list does not cover the moment this connection was made",
+    },
+    .{
+        .err = error.TlsCertificateStatusMissing,
+        .mapped = error.SslInvalidCertStatus,
+        .message = "the peer sent no certificate status response, and --cert-status asked for one",
+    },
+    .{
+        .err = error.TlsCertificateStatusInvalid,
+        .mapped = error.SslInvalidCertStatus,
+        .message = "the peer's certificate status response does not vouch for its certificate",
+    },
+    .{
+        .err = error.TlsCertificateStatusRevoked,
+        .mapped = error.SslInvalidCertStatus,
+        .message = "the peer's certificate status response says the certificate is revoked",
+    },
     .{
         .err = error.CertificateIssuerMismatch,
         .mapped = error.PeerFailedVerification,

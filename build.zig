@@ -233,13 +233,16 @@ pub fn build(b: *std.Build) void {
             // compression. They are wired here and nowhere else: no other
             // module speaks a QUIC packet or an HTTP/3 frame.
             //
-            // **`zurl-tls` still does not come in.** The trust roots come
-            // from the front package as a `std.crypto.Certificate.Bundle`,
-            // and `zurl-quic-tls` is what turns one into the vendored
-            // client's own option, the same way `zurl-net` does for a TLS
-            // session over TCP.
+            // **`zurl-tls` still does not come in as a TLS engine.** The
+            // trust roots come from the front package as a
+            // `std.crypto.Certificate.Bundle`, and `zurl-quic-tls` is what
+            // turns one into the vendored client's own option, the same
+            // way `zurl-net` does for a TLS session over TCP. The one name
+            // it does carry is the revocation list of `--crlfile`, whose
+            // type lives in `zurl-tls` beside the checks that read it.
             .{ .name = "zurl-quic", .module = quic },
             .{ .name = "zurl-quic-tls", .module = quic_tls },
+            .{ .name = "zurl-tls", .module = tls }, // ZURL PATCH: the crl.List type for --crlfile on the HTTP/3 transport.
             .{ .name = "zurl-h3", .module = h3 },
             .{ .name = "zurl-qpack", .module = qpack },
         },

@@ -894,8 +894,8 @@ pub fn print(w: *Io.Writer) !void {
         \\  --ssl-no-revoke, --ssl-revoke-best-effort,
         \\  --ssl-auto-client-cert, and --proxy-ssl-auto-client-cert are
         \\  Schannel options. curl on this platform accepts each and does
-        \\  nothing with it, and this build checks no revocation and sends
-        \\  no client certificate either way.
+        \\  nothing with it, and this build sends no client certificate
+        \\  either way.
         \\  --false-start, --no-npn, --egd-file, --random-file,
         \\  --metalink, and --ntlm-wb are flags curl itself has dropped.
         \\  --socks5-basic names the one SOCKS5 authentication offered.
@@ -958,7 +958,7 @@ pub fn print(w: *Io.Writer) !void {
         \\  stops before any socket. Each says in its own line above what
         \\  this build does instead. In short: there is no local address
         \\  or port to bind, no resolver to steer and no DoH, no unix
-        \\  socket, no packet marking, no revocation check and no key
+        \\  socket, no packet marking, no key
         \\  pinning, no TLS-SRP and no ECH and no session file, no SPNEGO
         \\  and no Kerberos and no NTLM and no AWS signature, no SASL
         \\  GSSAPI and no SASL DIGEST-MD5 and no SASL on ldap,

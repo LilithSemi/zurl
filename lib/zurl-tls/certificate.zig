@@ -368,6 +368,56 @@ pub fn parse(cert: Certificate) ParseError!Certificate.Parsed {
 // Tests
 // ---------------------------------------------------------------------
 
+/// Returns the DER of the serial number of the certificate in `cert`.
+///
+/// Neither `std.crypto.Certificate` nor `Certificate.Parsed` keeps the
+/// serial, and both a revocation list and an OCSP response name a
+/// certificate by it. The walk keeps the order of `parse` above, so an
+/// index that `parse` refuses is refused here for the same reason.
+pub fn serial(cert: Certificate) ElementError!der.Element.Slice {
+    const cert_bytes = cert.buffer;
+    const certificate = try parseElement(cert_bytes, cert.index);
+    const tbs_certificate = try parseElement(cert_bytes, certificate.slice.start);
+    const version_elem = try parseElement(cert_bytes, tbs_certificate.slice.start);
+    const serial_elem = if (@as(u8, @bitCast(version_elem.identifier)) == 0xa0)
+        try parseElement(cert_bytes, version_elem.slice.end)
+    else
+        version_elem;
+    return serial_elem.slice;
+}
+
+/// Returns the DER of the subject `Name` of the certificate in `cert`,
+/// header included.
+///
+/// RFC 6960 names this encoding for the issuer name hash of a `certID`,
+/// and OpenSSL hashes the same bytes, header and all. `Certificate.Parsed`
+/// keeps the content alone, which is why this walk exists beside `serial`.
+/// The walk keeps the order of `parse` above, so an index that `parse`
+/// refuses is refused here for the same reason.
+pub fn subjectName(cert: Certificate) ElementError!der.Element.Slice {
+    const cert_bytes = cert.buffer;
+    const certificate_elem = try parseElement(cert_bytes, cert.index);
+    const tbs_elem = try parseElement(cert_bytes, certificate_elem.slice.start);
+    var at = tbs_elem.slice.start;
+    const version_elem = try parseElement(cert_bytes, @intCast(at));
+    if (@as(u8, @bitCast(version_elem.identifier)) == 0xa0) {
+        at = version_elem.slice.end;
+    } else {
+        at = version_elem.slice.start;
+    }
+    const serial_elem = try parseElement(cert_bytes, @intCast(at));
+    at = serial_elem.slice.end;
+    const sig_elem = try parseElement(cert_bytes, @intCast(at));
+    at = sig_elem.slice.end;
+    const issuer_elem = try parseElement(cert_bytes, @intCast(at));
+    at = issuer_elem.slice.end;
+    const validity_elem = try parseElement(cert_bytes, @intCast(at));
+    at = validity_elem.slice.end;
+    const subject_at: u32 = @intCast(at);
+    const subject_elem = try parseElement(cert_bytes, @intCast(at));
+    return .{ .start = subject_at, .end = subject_elem.slice.end };
+}
+
 /// The minter of `Client.zig`, which is the one place this package writes
 /// a certificate. A second minter here would be a second reading of RFC
 /// 5280, and the two would drift.

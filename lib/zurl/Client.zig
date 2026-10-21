@@ -228,6 +228,18 @@ proxy_ca_loaded: ?[inputs_digest_len]u8,
 /// to an `https` origin loads both. `perform` writes this before it
 /// dispatches, the same way it writes `ca_inputs`.
 proxy_ca_inputs: zurl_core.ca.Inputs,
+/// The `--crlfile` path the transfer that runs now named. The sibling of
+/// `ca_inputs`: `perform` writes it before it dispatches, and the TLS
+/// setup hook reads it at the first hop that speaks TLS.
+crlfile: ?[]const u8, // ZURL PATCH
+/// True once the revocation list above has been looked at. The list
+/// loads once for the life of a `Client`, the way the roots do, so a
+/// later transfer cannot point the engine at a different file.
+crl_loaded: bool, // ZURL PATCH
+/// The loaded list. It lives here, and not in the engine, because the
+/// engine borrows the pointer for the length of one handshake and this
+/// `Client` owns the bytes.
+crl: ?zurl_tls.crl.List, // ZURL PATCH
 /// The most recent digest server nonce this `Client` has answered, and how
 /// many requests have reused it. See `nextNc`. Empty until the first
 /// digest challenge.
@@ -288,6 +300,9 @@ pub fn init(gpa: Allocator, io: Io) Client {
         .proxy_ca_load_count = 0,
         .proxy_ca_loaded = null,
         .proxy_ca_inputs = .{},
+        .crlfile = null, // ZURL PATCH
+        .crl_loaded = false, // ZURL PATCH
+        .crl = null, // ZURL PATCH
         .digest_nonce_buf = undefined,
         .digest_nonce_len = 0,
         .digest_nc = 0,
@@ -309,6 +324,8 @@ pub fn deinit(c: *Client) void {
     c.protocols.deinit(c.allocator);
     c.header_storage.deinit(c.allocator);
     c.secret_storage.deinit(c.allocator);
+    // ZURL PATCH: the revocation list is this `Client`'s own allocation.
+    if (c.crl) |*list| list.deinit(); // ZURL PATCH
     c.http.deinit();
 }
 
@@ -398,6 +415,9 @@ pub fn perform(c: *Client, url_text: []const u8, options: Transfer.Options, d: ?
     // between two transfers.
     c.ca_inputs = options.ca;
     c.ca_diagnostics = d;
+    // ZURL PATCH: the revocation list of `--crlfile`, read by the same
+    // ZURL PATCH: hook at the same moment as the roots.
+    c.crlfile = options.crlfile; // ZURL PATCH
     c.http.tls_setup = .{ .ptr = c, .call = tlsSetup };
     // **And the proxy's own roots, through a second hook.** The engine calls
     // this one before a hop that puts TLS on the connection to an `https`
@@ -636,6 +656,34 @@ fn tlsSetup(ptr: *anyopaque) zurl_http.engine.TlsSetupError!void {
         error.PeerFailedVerification => return error.PeerFailedVerification,
         else => return error.SslConnectError,
     };
+    // ZURL PATCH: the revocation list of `--crlfile` loads at the same
+    // ZURL PATCH: moment the roots do, and every later handshake borrows
+    // ZURL PATCH: the pointer the way it borrows the bundle. A transfer
+    // ZURL PATCH: that named no list leaves the field null, which is the
+    // ZURL PATCH: engine's own default, and the load of a list never
+    // ZURL PATCH: runs twice: like the roots, the first transfer that
+    // ZURL PATCH: needed it fixed it for the life of this `Client`.
+    if (c.crl_loaded) return; // ZURL PATCH
+    c.crl_loaded = true; // ZURL PATCH
+    const path = c.crlfile orelse return; // ZURL PATCH
+    const list = loadCrl(c.allocator, c.io, path) catch |err| switch (err) { // ZURL PATCH
+        error.OutOfMemory => return error.OutOfMemory, // ZURL PATCH
+        else => return error.CrlBadFile, // ZURL PATCH
+    }; // ZURL PATCH
+    c.crl = list; // ZURL PATCH
+    c.http.crl = &c.crl.?; // ZURL PATCH
+}
+
+/// Reads the revocation list one `--crlfile` path names.
+///
+/// ZURL PATCH: not upstream. The file is untrusted input in the sense
+/// `loader.zig` spells out for a `--cacert` path, so the read is bounded
+/// the same way and every fault of the read is the caller's to name.
+fn loadCrl(gpa: std.mem.Allocator, io: Io, path: []const u8) !zurl_tls.crl.List {
+    var dir: Io.Dir = .cwd();
+    const text = try dir.readFileAlloc(io, path, gpa, .limited(zurl_tls.crl.max_crl_file_bytes));
+    defer gpa.free(text);
+    return zurl_tls.crl.parsePem(gpa, text);
 }
 
 /// The engine's view of `ensureProxyCaBundle`. `perform` puts this in
@@ -1397,6 +1445,7 @@ fn sendOnce(
         // behalf of a caller that asked for neither.
         .trusted_secrets = options.location_trusted,
         .insecure = options.insecure,
+        .cert_status = options.cert_status, // ZURL PATCH: --cert-status rides on the request, the way the verification flags do.
         .tcp_no_delay = options.tcp_no_delay,
         // The jar goes through as it is. It is not a secret in the sense
         // `secrets` means: the engine asks it again for every hop, and the

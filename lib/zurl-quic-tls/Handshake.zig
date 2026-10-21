@@ -284,6 +284,15 @@ pub const Options = struct {
     /// How to check the authenticity of the peer certificate. Also the
     /// vendored client's own field.
     ca: @FieldType(Client.Options, "ca"),
+    /// Whether the session asks for a stapled OCSP response and refuses
+    /// the connection when none arrives or when it does not vouch for the
+    /// leaf. Also the vendored client's own field. This is curl's
+    /// `--cert-status` on a QUIC connection.
+    require_staple: @FieldType(Client.Options, "require_staple") = false, // ZURL PATCH
+    /// The revocation list the leaf of the chain is checked against. Also
+    /// the vendored client's own field. This is curl's `--crlfile` on a
+    /// QUIC connection.
+    crl: ?*const zurl_tls.crl.List = null, // ZURL PATCH
     /// The ALPN protocols to offer, in the order of preference. RFC 9001
     /// section 8.1 makes ALPN mandatory for QUIC, so an empty list is
     /// refused rather than sent.
@@ -341,6 +350,8 @@ pub const Options = struct {
 state: State,
 host: @FieldType(Client.Options, "host"),
 ca: @FieldType(Client.Options, "ca"),
+require_staple: @FieldType(Client.Options, "require_staple"), // ZURL PATCH
+crl: ?*const zurl_tls.crl.List, // ZURL PATCH
 alpn_protocols: []const []const u8,
 realtime_now: std.Io.Timestamp,
 original_destination_connection_id: packet.ConnectionId,
@@ -393,6 +404,8 @@ pub fn init(options: Options) Error!Handshake {
         .state = .wait_server_hello,
         .host = options.host,
         .ca = options.ca,
+        .require_staple = options.require_staple, // ZURL PATCH
+        .crl = options.crl, // ZURL PATCH
         .alpn_protocols = options.alpn_protocols,
         .realtime_now = options.realtime_now,
         .original_destination_connection_id = options.original_destination_connection_id,
@@ -655,6 +668,8 @@ fn handle(
                 body,
                 self.host,
                 self.ca,
+                self.require_staple, // ZURL PATCH
+                self.crl, // ZURL PATCH
                 self.realtime_now,
                 &self.certificate_key,
             );
@@ -1059,6 +1074,18 @@ fn writeClientHello(self: *Handshake, parameters: transport_parameters.Parameter
     // ALPN, RFC 7301. The bytes come from the vendored client's encoder,
     // so a QUIC hello and a TLS hello carry the same offer.
     try write(&w, alpn_extension);
+
+    // ZURL PATCH: status_request, RFC 6066 section 8, which asks the
+    // ZURL PATCH: server for a stapled OCSP response. The body names the
+    // ZURL PATCH: OCSP status type and carries an empty responder list
+    // ZURL PATCH: and an empty extensions list, the same four bytes the
+    // ZURL PATCH: TLS hello sends, so both transports ask for the same
+    // ZURL PATCH: thing.
+    if (self.require_staple) { // ZURL PATCH
+        try writeInt(&w, u16, @backingInt(tls.ExtensionType.status_request)); // ZURL PATCH
+        try writeInt(&w, u16, 5); // ZURL PATCH
+        try write(&w, &.{ 0x01, 0x00, 0x00, 0x00, 0x00 }); // ZURL PATCH
+    } // ZURL PATCH
 
     // supported_versions, RFC 8446 section 4.2.1. **TLS 1.3 alone**,
     // because RFC 9001 section 4.2 gives QUIC no other version.

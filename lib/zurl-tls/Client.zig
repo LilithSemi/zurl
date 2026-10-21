@@ -9,6 +9,8 @@ const crypto = std.crypto;
 const assert = std.debug.assert;
 const Certificate = std.crypto.Certificate;
 const certificate = @import("certificate.zig"); // ZURL PATCH: the bounded certificate reader. `Certificate.parse` has no bound check at all, so it reads past the end of a certificate a peer chose.
+const crl = @import("crl.zig"); // ZURL PATCH: the revocation list of `--crlfile`, and the checks of `--cert-status`.
+const ocsp = @import("ocsp.zig"); // ZURL PATCH: the staple verifier of `--cert-status`.
 const Reader = std.Io.Reader;
 const Writer = std.Io.Writer;
 
@@ -115,6 +117,21 @@ pub const SslKeyLog = struct {
 /// at least this amount.
 pub const min_buffer_len = tls.max_ciphertext_record_len;
 
+// ZURL PATCH: the room the revocation checks keep for the leaf serial
+// ZURL PATCH: and for the staple. A serial of RFC 5280 section 4.1.2.2 is
+// ZURL PATCH: at most twenty octets, and sixty-four holds the longest
+// ZURL PATCH: encoding an issuer may have written before that rule. A
+// ZURL PATCH: staple carries the response and usually the responder
+// ZURL PATCH: certificate, which fits in a few kilobytes; a larger one is
+// ZURL PATCH: refused, because a response that size is not a staple this
+// ZURL PATCH: client asked for.
+pub const leaf_serial_max: usize = 64; // ZURL PATCH
+pub const staple_max: usize = 16384; // ZURL PATCH
+// ZURL PATCH: the largest issuer certificate the checks keep a copy of.
+// ZURL PATCH: A root of RSA-4096 is about 1.2 kB, and four kilobytes holds
+// ZURL PATCH: every root in the embedded store with room to spare.
+pub const leaf_issuer_max: usize = 4096; // ZURL PATCH
+
 pub const Options = struct {
     /// How to perform host verification of server certificates.
     host: union(enum) {
@@ -182,6 +199,18 @@ pub const Options = struct {
     // ZURL PATCH: handshake. See `encodeAlpn` and `readAlpn` in the
     // ZURL PATCH: appended block.
     alpn_protocols: []const []const u8 = &.{}, // ZURL PATCH
+    // ZURL PATCH: RFC 6966 section 8 asks the server for a stapled OCSP
+    // ZURL PATCH: response, and refuses the session when none arrives or
+    // ZURL PATCH: when the staple that arrives does not vouch for the
+    // ZURL PATCH: leaf. This is curl's `--cert-status`. It rides with a
+    // ZURL PATCH: trust check: a staple nobody can anchor is worth
+    // ZURL PATCH: nothing, so `--insecure` turns it off the way it turns
+    // ZURL PATCH: the rest of the check off.
+    require_staple: bool = false, // ZURL PATCH
+    // ZURL PATCH: the leaf of the chain is checked against this
+    // ZURL PATCH: revocation list. This is curl's `--crlfile`, and it
+    // ZURL PATCH: rides with a trust check for the same reason.
+    crl: ?*const crl.List = null, // ZURL PATCH
 
     pub const entropy_len = 240;
 };
@@ -254,6 +283,19 @@ pub const InitError = error{
     // ZURL PATCH: because the extension counts its host in a `u16` and this
     // ZURL PATCH: one is longer than that count holds. See `host_name_max`.
     TlsHostNameTooLong, // ZURL PATCH
+    // ZURL PATCH: the revocation checks. A revoked certificate and a list
+    // ZURL PATCH: that cannot vouch for itself are answers about the peer
+    // ZURL PATCH: certificate; a staple that never arrived, one that does
+    // ZURL PATCH: not vouch, and one that cannot be checked are answers
+    // ZURL PATCH: about `--cert-status`. curl separates the two: the
+    // ZURL PATCH: certificate answer is exit 60 and the staple answer is
+    // ZURL PATCH: exit 91.
+    TlsCertificateRevoked, // ZURL PATCH
+    TlsCrlUntrusted, // ZURL PATCH
+    TlsCrlOutOfDate, // ZURL PATCH
+    TlsCertificateStatusMissing, // ZURL PATCH
+    TlsCertificateStatusInvalid, // ZURL PATCH
+    TlsCertificateStatusRevoked, // ZURL PATCH
     // ZURL PATCH: the chain rules of `verifyIssued`. A certificate that
     // signs another certificate must carry `basicConstraints` with `cA`
     // TRUE, it must assert `keyCertSign` where it carries `keyUsage`, and
@@ -264,6 +306,20 @@ pub const InitError = error{
     // ZURL PATCH: `certificate.ParseError` holds the one name the bounded
     // ZURL PATCH: reader adds to the set the standard library gives.
 } || IssuerError || StrengthError || certificate.ParseError || std.Io.Writer.Error || std.Io.Reader.ShortError || std.Io.Cancelable; // ZURL PATCH
+
+// ZURL PATCH: copies the whole certificate that `cert` names into
+// ZURL PATCH: `out`, and answers the part of `out` it wrote, or null when
+// ZURL PATCH: the certificate does not fit. The checks of `--crlfile` and
+// ZURL PATCH: `--cert-status` read the issuer after the handshake moved
+// ZURL PATCH: on, so the bytes they read have to be theirs alone.
+fn copyCert(cert: Certificate, out: []u8) ?[]const u8 { // ZURL PATCH
+    const outer = certificate.parseElement(cert.buffer, @intCast(cert.index)) catch return null; // ZURL PATCH
+    const total = outer.slice.end - cert.index; // ZURL PATCH
+    if (total > out.len) return null; // ZURL PATCH
+    const der = out[0..total]; // ZURL PATCH
+    @memcpy(der, cert.buffer[cert.index..][0..total]); // ZURL PATCH
+    return der; // ZURL PATCH
+} // ZURL PATCH
 
 /// Initiates a TLS handshake and establishes a TLSv1.2 or TLSv1.3 session.
 ///
@@ -302,6 +358,18 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
     // ZURL PATCH: compiler computed. See the `iovecs` block.
     var alpn_buf: [alpn_extension_max]u8 = undefined; // ZURL PATCH
     const alpn_extension = try encodeAlpn(options.alpn_protocols, &alpn_buf); // ZURL PATCH
+
+    // ZURL PATCH: the status_request extension, RFC 6066 section 8. The
+    // ZURL PATCH: body names the OCSP status type and carries an empty
+    // ZURL PATCH: responder list and an empty extensions list, which is
+    // ZURL PATCH: the whole request a stapling server needs. It is a
+    // ZURL PATCH: fixed nine bytes, so it needs no buffer; it rides the
+    // ZURL PATCH: same iovec trail the ALPN extension rides.
+    const status_request_extension_bytes = tls.extension(.status_request, .{ 0x01, 0x00, 0x00, 0x00, 0x00 }); // ZURL PATCH
+    const status_request_extension: []const u8 = if (options.require_staple) // ZURL PATCH
+        &status_request_extension_bytes // ZURL PATCH
+    else // ZURL PATCH
+        &.{}; // ZURL PATCH
 
     const extensions_payload = tls.extension(.supported_versions, array(u8, tls.ProtocolVersion, .{
         .tls_1_3,
@@ -354,7 +422,7 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
     // ZURL PATCH: host on the wire, so every enclosing length counts them
     // ZURL PATCH: exactly the way it counts the host.
     const extensions_header =
-        int(u16, @intCast(extensions_payload.len + server_name_extension_len + alpn_extension.len)) ++ // ZURL PATCH
+        int(u16, @intCast(extensions_payload.len + server_name_extension_len + alpn_extension.len + status_request_extension.len)) ++ // ZURL PATCH
         extensions_payload ++
         server_name_extension;
 
@@ -367,12 +435,12 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
         extensions_header;
 
     const out_handshake = .{@backingInt(tls.HandshakeType.client_hello)} ++
-        int(u24, @intCast(client_hello.len - server_name_extension.len + server_name_extension_len + alpn_extension.len)) ++ // ZURL PATCH
+        int(u24, @intCast(client_hello.len - server_name_extension.len + server_name_extension_len + alpn_extension.len + status_request_extension.len)) ++ // ZURL PATCH
         client_hello;
 
     var cleartext_header_buf = .{@backingInt(tls.ContentType.handshake)} ++ // ZURL PATCH: `var`, for the block below.
         int(u16, @backingInt(tls.ProtocolVersion.tls_1_0)) ++
-        int(u16, @intCast(out_handshake.len - server_name_extension.len + server_name_extension_len + alpn_extension.len)) ++ // ZURL PATCH
+        int(u16, @intCast(out_handshake.len - server_name_extension.len + server_name_extension_len + alpn_extension.len + status_request_extension.len)) ++ // ZURL PATCH
         out_handshake;
 
     // ZURL PATCH: `--tls-max 1.2` narrows the offer to TLS 1.2 alone.
@@ -416,7 +484,7 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
         // ZURL PATCH: neither length is known then. RFC 8446 section 4.2
         // ZURL PATCH: puts no order on the extensions of a hello, so an
         // ZURL PATCH: extension written last is a legal hello.
-        var iovecs: [3][]const u8 = undefined; // ZURL PATCH
+        var iovecs: [4][]const u8 = undefined; // ZURL PATCH
         var iovec_len: usize = 1; // ZURL PATCH
         iovecs[0] = cleartext_header; // ZURL PATCH
         if (host.len != 0) { // ZURL PATCH
@@ -425,6 +493,10 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
         } // ZURL PATCH
         if (alpn_extension.len != 0) { // ZURL PATCH
             iovecs[iovec_len] = alpn_extension; // ZURL PATCH
+            iovec_len += 1; // ZURL PATCH
+        } // ZURL PATCH
+        if (status_request_extension.len != 0) { // ZURL PATCH
+            iovecs[iovec_len] = status_request_extension; // ZURL PATCH
             iovec_len += 1; // ZURL PATCH
         } // ZURL PATCH
         try output.writeVecAll(iovecs[0..iovec_len]); // ZURL PATCH
@@ -453,6 +525,26 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
     var write_seq: u64 = 0;
     var read_seq: u64 = 0;
     var prev_cert: Certificate.Parsed = undefined;
+    // ZURL PATCH: the state the revocation checks need. `leaf_serial` is
+    // ZURL PATCH: the DER of the serial number of the leaf, copied out of
+    // ZURL PATCH: the certificate message, because the checks run after the
+    // ZURL PATCH: handshake moved on and the message buffer is not stable
+    // ZURL PATCH: that long. `staple` is the OCSP response of a TLS 1.3
+    // ZURL PATCH: certificate entry or of a TLS 1.2 `certificate_status`
+    // ZURL PATCH: message, copied for the same reason, and
+    // ZURL PATCH: `staple_checked` says the check ran on it. The issuer
+    // ZURL PATCH: rides as copied DER bytes for the same reason: it comes
+    // ZURL PATCH: from the second certificate of the chain or from the
+    // ZURL PATCH: trust store, and the checks run after the handshake
+    // ZURL PATCH: moved on.
+    var leaf_serial_buf: [leaf_serial_max]u8 = undefined; // ZURL PATCH
+    var leaf_issuer_buf: [leaf_issuer_max]u8 = undefined; // ZURL PATCH
+    var leaf_issuer_der: []const u8 = &.{}; // ZURL PATCH
+    var leaf_serial: []const u8 = &.{}; // ZURL PATCH
+    var staple_buf: [staple_max]u8 = undefined; // ZURL PATCH
+    var staple: ?[]const u8 = null; // ZURL PATCH
+    var staple_checked = false; // ZURL PATCH
+    var revocation_checked = false; // ZURL PATCH
     // ZURL PATCH: what the chain rules below need beyond one pair of
     // ZURL PATCH: certificates. `chain_host` is the host this session is
     // ZURL PATCH: for, which every `nameConstraints` of every issuer must
@@ -722,6 +814,7 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                                 p.transcript_hash.update(cleartext_header[tls.record_header_len..]); // Client Hello part 1
                                 p.transcript_hash.update(host); // Client Hello part 2
                                 p.transcript_hash.update(alpn_extension); // ZURL PATCH: Client Hello part 3.
+                                p.transcript_hash.update(status_request_extension); // ZURL PATCH: Client Hello part 4.
                                 p.transcript_hash.update(wrapped_handshake);
                             },
 
@@ -852,8 +945,20 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                             if (tls_version == .tls_1_3) {
                                 try certs_decoder.ensure(2);
                                 const total_ext_size = certs_decoder.decode(u16);
-                                const all_extd = try certs_decoder.sub(total_ext_size);
-                                _ = all_extd;
+                                var all_extd = try certs_decoder.sub(total_ext_size); // ZURL PATCH: `var`, for the staple read below.
+                                // ZURL PATCH: the leaf's entry carries the staple a server that
+                                // ZURL PATCH: answers `status_request` sends, and no other entry
+                                // ZURL PATCH: carries one.
+                                if (cert_index == 0) { // ZURL PATCH
+                                    // ZURL PATCH: the staple is copied here, while the
+                                    // ZURL PATCH: certificate bytes are on the table, because
+                                    // ZURL PATCH: the checks run after the handshake moved on.
+                                    if (try stapleOfCertExtensions(&all_extd)) |response| { // ZURL PATCH
+                                        if (response.len > staple_buf.len) return error.TlsCertificateStatusInvalid; // ZURL PATCH
+                                        @memcpy(staple_buf[0..response.len], response); // ZURL PATCH
+                                        staple = staple_buf[0..response.len]; // ZURL PATCH
+                                    } // ZURL PATCH
+                                } // ZURL PATCH
                             }
 
                             const subject_cert: Certificate = .{
@@ -873,8 +978,19 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                                 // Keep track of the public key for the
                                 // certificate_verify message later.
                                 try main_cert_pub_key.init(subject.pub_key_algo, subject.pubKey());
+                                // ZURL PATCH: the serial is copied here, while the leaf's
+                                // ZURL PATCH: bytes are on the table, because the checks run
+                                // ZURL PATCH: after the handshake moved on.
+                                const serial_slice = try certificate.serial(subject.certificate); // ZURL PATCH
+                                const serial_der = subject.certificate.buffer[serial_slice.start..serial_slice.end]; // ZURL PATCH
+                                if (serial_der.len > leaf_serial_buf.len) return error.CertificateFieldHasInvalidLength; // ZURL PATCH
+                                @memcpy(leaf_serial_buf[0..serial_der.len], serial_der); // ZURL PATCH
+                                leaf_serial = leaf_serial_buf[0..serial_der.len]; // ZURL PATCH
                             } else {
                                 try verifyIssued(prev_cert, subject, chain_host, cert_index - 1, now_sec); // ZURL PATCH: an issuer must be a certificate authority, and it must allow the host this session is for. See `verifyIssued`.
+                                if (cert_index == 1) { // ZURL PATCH: the second certificate is the issuer of the leaf, copied for the checks.
+                                    leaf_issuer_der = copyCert(subject.certificate, &leaf_issuer_buf) orelse return error.TlsCertificateNotVerified; // ZURL PATCH
+                                } // ZURL PATCH
                             }
 
                             switch (options.ca) {
@@ -885,12 +1001,29 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                                 .self_signed => {
                                     try subject.verify(subject, now_sec);
                                     handshake_state = .trust_chain_established;
+                                    // ZURL PATCH: a self signed leaf is its own issuer, copied for the checks.
+                                    if (cert_index == 0) leaf_issuer_der = copyCert(subject.certificate, &leaf_issuer_buf) orelse return error.TlsCertificateNotVerified; // ZURL PATCH
                                     break :cert;
                                 },
                                 .bundle => |ca| if (verify: {
                                     try ca.lock.lockShared(ca.io);
                                     defer ca.lock.unlockShared(ca.io);
-                                    break :verify ca.bundle.verify(subject, now_sec);
+                                    // ZURL PATCH: the issuer of a leaf that a root vouched for on its
+                                    // ZURL PATCH: own is parsed under the same shared lock, for the
+                                    // ZURL PATCH: revocation checks. The bundle pre-parses every
+                                    // ZURL PATCH: certificate it holds, so the two reads cannot fail.
+                                    const trusted = ca.bundle.verify(subject, now_sec); // ZURL PATCH
+                                    if (trusted) |_| { // ZURL PATCH
+                                        if (cert_index == 0) { // ZURL PATCH
+                                            const issuer_index = ca.bundle.find(subject.issuer()) orelse unreachable; // ZURL PATCH
+                                            const issuer_cert: Certificate = .{ // ZURL PATCH
+                                                .buffer = ca.bundle.bytes.items, // ZURL PATCH
+                                                .index = issuer_index, // ZURL PATCH
+                                            }; // ZURL PATCH
+                                            leaf_issuer_der = copyCert(issuer_cert, &leaf_issuer_buf) orelse return error.TlsCertificateNotVerified; // ZURL PATCH
+                                        } // ZURL PATCH
+                                    } else |_| {} // ZURL PATCH
+                                    break :verify trusted; // ZURL PATCH
                                 }) {
                                     handshake_state = .trust_chain_established;
                                     break :cert;
@@ -932,6 +1065,21 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                             .certificate => try tryDownloadRootCert(&chain, &options),
                             else => return error.TlsUnexpectedMessage,
                         }
+                        // ZURL PATCH: the CRL check of a TLS 1.2 session. The staple
+                        // ZURL PATCH: was answered in `certificate_status`, and the
+                        // ZURL PATCH: list runs here, where the certificate message has
+                        // ZURL PATCH: been read and the leaf and its issuer are on the
+                        // ZURL PATCH: table. The flag keeps the check to one run.
+                        if (!revocation_checked and trust_checked) { // ZURL PATCH
+                            revocation_checked = true; // ZURL PATCH
+                            if (leaf_issuer_der.len != 0) { // ZURL PATCH
+                                const issuer_cert: Certificate = .{ .buffer = leaf_issuer_der, .index = 0 }; // ZURL PATCH
+                                const issuer = certificate.parse(issuer_cert) catch unreachable; // ZURL PATCH: the same bytes parsed in the walk above.
+                                if (options.crl) |list| { // ZURL PATCH
+                                    try list.check(leaf_serial, issuer, now_sec); // ZURL PATCH
+                                } // ZURL PATCH
+                            } // ZURL PATCH
+                        } // ZURL PATCH
 
                         switch (handshake_cipher) {
                             inline else => |*p| p.transcript_hash.update(wrapped_handshake),
@@ -1054,6 +1202,25 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                             .certificate => try tryDownloadRootCert(&chain, &options),
                             else => return error.TlsUnexpectedMessage,
                         }
+                        // ZURL PATCH: the revocation checks of a TLS 1.3 session. The
+                        // ZURL PATCH: staple rode the leaf's certificate entry, and both
+                        // ZURL PATCH: checks run here, where the certificate message has
+                        // ZURL PATCH: been read and the leaf, its issuer, and the staple are
+                        // ZURL PATCH: on the table. The flag keeps the check to one run.
+                        if (!revocation_checked and trust_checked) { // ZURL PATCH
+                            revocation_checked = true; // ZURL PATCH
+                            if (leaf_issuer_der.len != 0) { // ZURL PATCH
+                                const issuer_cert: Certificate = .{ .buffer = leaf_issuer_der, .index = 0 }; // ZURL PATCH
+                                const issuer = certificate.parse(issuer_cert) catch unreachable; // ZURL PATCH: the same bytes parsed in the walk above.
+                                if (options.crl) |list| { // ZURL PATCH
+                                    try list.check(leaf_serial, issuer, now_sec); // ZURL PATCH
+                                } // ZURL PATCH
+                                if (staple) |response| { // ZURL PATCH
+                                    try ocsp.verify(response, leaf_serial, issuer, now_sec); // ZURL PATCH
+                                    staple_checked = true; // ZURL PATCH
+                                } // ZURL PATCH
+                            } // ZURL PATCH
+                        } // ZURL PATCH
                         switch (handshake_cipher) {
                             inline else => |*p| {
                                 const pad: [64]u8 = @splat(' ');
@@ -1071,6 +1238,13 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                     .finished => {
                         if (cipher_state == .cleartext) return error.TlsUnexpectedMessage;
                         if (handshake_state != .finished) return error.TlsUnexpectedMessage;
+                        // ZURL PATCH: curl refuses a session that asked for a staple and
+                        // ZURL PATCH: got none, and one whose staple arrived but never met an
+                        // ZURL PATCH: issuer it could be checked against.
+                        if (options.require_staple and trust_checked) { // ZURL PATCH
+                            if (staple == null) return error.TlsCertificateStatusMissing; // ZURL PATCH
+                            if (!staple_checked) return error.TlsCertificateStatusInvalid; // ZURL PATCH
+                        } // ZURL PATCH
                         // This message is to trick buggy proxies into behaving correctly.
                         const client_change_cipher_spec_msg = .{@backingInt(tls.ContentType.change_cipher_spec)} ++
                             int(u16, @backingInt(tls.ProtocolVersion.tls_1_2)) ++
@@ -1182,7 +1356,41 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                             .alpn = alpn_selected, // ZURL PATCH
                         };
                     },
-                    else => return error.TlsUnexpectedMessage,
+                    else => { // ZURL PATCH
+                        // ZURL PATCH: RFC 5246 section 7.4.1.4.1. The staple arrives
+                        // ZURL PATCH: right after the Certificate message of a TLS 1.2
+                        // ZURL PATCH: server that answered the `status_request`
+                        // ZURL PATCH: extension. `HandshakeType` carries no name for the
+                        // ZURL PATCH: message, so the value is read here, and every other
+                        // ZURL PATCH: value keeps the refusal upstream gives it.
+                        if (@backingInt(handshake_type) != 22) return error.TlsUnexpectedMessage; // ZURL PATCH
+                        if (cipher_state != .cleartext) return error.TlsUnexpectedMessage; // ZURL PATCH
+                        switch (handshake_state) { // ZURL PATCH
+                            .certificate, .trust_chain_established => {}, // ZURL PATCH
+                            else => return error.TlsUnexpectedMessage, // ZURL PATCH
+                        } // ZURL PATCH
+                        switch (handshake_cipher) { // ZURL PATCH: the staple is part of the transcript.
+                            inline else => |*p| p.transcript_hash.update(wrapped_handshake), // ZURL PATCH
+                        } // ZURL PATCH
+                        try hsd.ensure(1 + 3); // ZURL PATCH
+                        if (hsd.decode(u8) != 1) return error.TlsCertificateStatusInvalid; // ZURL PATCH: status type is ocsp or nothing.
+                        const response_size = hsd.decode(u24); // ZURL PATCH
+                        const response = try hsd.sub(response_size); // ZURL PATCH
+                        const response_bytes = response.rest(); // ZURL PATCH
+                        if (response_bytes.len > staple_buf.len) return error.TlsCertificateStatusInvalid; // ZURL PATCH
+                        @memcpy(staple_buf[0..response_bytes.len], response_bytes); // ZURL PATCH
+                        staple = staple_buf[0..response_bytes.len]; // ZURL PATCH
+                        // ZURL PATCH: the leaf and its issuer are on the table from the
+                        // ZURL PATCH: Certificate message this staple answers, so the check
+                        // ZURL PATCH: runs here and not at the end.
+                        if (trust_checked) { // ZURL PATCH
+                            if (leaf_issuer_der.len == 0) return error.TlsCertificateStatusInvalid; // ZURL PATCH
+                            const issuer_cert: Certificate = .{ .buffer = leaf_issuer_der, .index = 0 }; // ZURL PATCH
+                            const issuer = certificate.parse(issuer_cert) catch unreachable; // ZURL PATCH: the same bytes parsed in the walk above.
+                            try ocsp.verify(staple.?, leaf_serial, issuer, now_sec); // ZURL PATCH
+                            staple_checked = true; // ZURL PATCH
+                        } // ZURL PATCH
+                    }, // ZURL PATCH
                 }
                 if (ctd.eof()) break;
                 cleartext_fragment_start = ctd.idx;
@@ -2248,6 +2456,33 @@ fn encodeAlpn(
     mem.writeInt(u16, out[2..4], list_len + 2, .big);
     mem.writeInt(u16, out[4..6], list_len, .big);
     return out[0..at];
+}
+
+/// Reads the stapled OCSP response out of the extensions of one
+/// certificate entry of a TLS 1.3 Certificate message, and answers null
+/// for an entry that carries none.
+///
+/// ZURL PATCH: not upstream. RFC 8446 section 4.4.2 puts one
+/// `CertificateStatus` in the extensions of the leaf's entry, and the
+/// bytes of it are untrusted input, so every read below is a refusal
+/// before it is a read.
+fn stapleOfCertExtensions(extd: *tls.Decoder) error{ TlsDecodeError, TlsCertificateStatusInvalid }!?[]const u8 {
+    while (!extd.eof()) {
+        try extd.ensure(2 + 2);
+        const et = extd.decode(tls.ExtensionType);
+        const ext_size = extd.decode(u16);
+        var entry = try extd.sub(ext_size);
+        if (et != .status_request) continue;
+        // CertificateStatus: one byte of status type, which is ocsp, and
+        // the response behind a 24 bit count.
+        try entry.ensure(1 + 3);
+        if (entry.decode(u8) != 1) return error.TlsCertificateStatusInvalid;
+        const response_size = entry.decode(u24);
+        const response = try entry.sub(response_size);
+        if (!entry.eof()) return error.TlsCertificateStatusInvalid;
+        return response.rest();
+    }
+    return null;
 }
 
 /// Reads the peer's ALPN answer out of one extension, and checks it against
@@ -3373,6 +3608,14 @@ pub const quic = struct {
         TlsIllegalParameter,
         TlsCertificateNotVerified,
         CertificatePublicKeyInvalid,
+        // ZURL PATCH: the revocation checks of `--crlfile` and
+        // ZURL PATCH: `--cert-status`, which run in the same walk.
+        TlsCertificateRevoked, // ZURL PATCH
+        TlsCrlUntrusted, // ZURL PATCH
+        TlsCrlOutOfDate, // ZURL PATCH
+        TlsCertificateStatusMissing, // ZURL PATCH
+        TlsCertificateStatusInvalid, // ZURL PATCH
+        TlsCertificateStatusRevoked, // ZURL PATCH
     } || IssuerError || StrengthError || certificate.ParseError ||
         Certificate.Parsed.VerifyHostNameError ||
         Certificate.Parsed.VerifyError || Certificate.Bundle.VerifyError ||
@@ -3399,6 +3642,8 @@ pub const quic = struct {
         body: []u8,
         host: @FieldType(Options, "host"),
         ca: @FieldType(Options, "ca"),
+        require_staple: bool, // ZURL PATCH: the `--cert-status` ask, verified in this same walk.
+        crl_list: ?*const crl.List, // ZURL PATCH: the `--crlfile` list, checked in this same walk.
         realtime_now: std.Io.Timestamp,
         key_out: *CertificateKey,
     ) VerifyCertificateError!void {
@@ -3416,6 +3661,13 @@ pub const quic = struct {
 
         var cert_index: usize = 0;
         var prev_cert: Certificate.Parsed = undefined;
+        // ZURL PATCH: the state the revocation checks need, the same shape
+        // ZURL PATCH: the walk in `init` keeps. The bytes of the certificate
+        // ZURL PATCH: message are stable for the length of this call, so the
+        // ZURL PATCH: serial and the staple need no copy here.
+        var leaf_serial: []const u8 = &.{}; // ZURL PATCH
+        var leaf_issuer: ?Certificate.Parsed = null; // ZURL PATCH
+        var staple: ?[]const u8 = null; // ZURL PATCH
         // The two values the chain rules need beyond one pair of
         // certificates. They are read here exactly as `init` reads them,
         // so both transports give `verifyIssued` the same answers.
@@ -3433,7 +3685,8 @@ pub const quic = struct {
             // list walk in step with the bytes.
             try certs.ensure(2);
             const ext_size = certs.decode(u16);
-            _ = try certs.sub(ext_size);
+            var extd = try certs.sub(ext_size); // ZURL PATCH: `var`, for the staple read below.
+            if (cert_index == 0) staple = try stapleOfCertExtensions(&extd); // ZURL PATCH
 
             const subject_cert: Certificate = .{
                 .buffer = certd.buf,
@@ -3452,21 +3705,45 @@ pub const quic = struct {
                     .explicit => |name| try verifyHost(subject, name),
                 }
                 try key_out.inner.init(subject.pub_key_algo, subject.pubKey());
+                // ZURL PATCH: the serial is read here, while the leaf's bytes are
+                // ZURL PATCH: on the table.
+                const serial_slice = try certificate.serial(subject.certificate); // ZURL PATCH
+                leaf_serial = subject.certificate.buffer[serial_slice.start..serial_slice.end]; // ZURL PATCH
             } else {
                 try verifyIssued(prev_cert, subject, chain_host, cert_index - 1, now_sec);
+                if (cert_index == 1) leaf_issuer = subject; // ZURL PATCH
             }
 
             switch (ca) {
                 .no_verification => return,
                 .self_signed => {
                     try subject.verify(subject, now_sec);
+                    // ZURL PATCH: a self signed leaf is its own issuer.
+                    if (cert_index == 0) leaf_issuer = subject; // ZURL PATCH
+                    try checkRevocation(crl_list, require_staple, staple, leaf_serial, leaf_issuer orelse return error.TlsCertificateNotVerified, now_sec); // ZURL PATCH
                     return;
                 },
                 .bundle => |trust| if (verify: {
                     try trust.lock.lockShared(trust.io);
                     defer trust.lock.unlockShared(trust.io);
-                    break :verify trust.bundle.verify(subject, now_sec);
+                    // ZURL PATCH: the issuer of a leaf that a root vouched for on its
+                    // ZURL PATCH: own is parsed under the same shared lock, for the
+                    // ZURL PATCH: revocation checks. The bundle pre-parses every
+                    // ZURL PATCH: certificate it holds, so the two reads cannot fail.
+                    const trusted = trust.bundle.verify(subject, now_sec); // ZURL PATCH
+                    if (trusted) |_| { // ZURL PATCH
+                        if (cert_index == 0) { // ZURL PATCH
+                            const issuer_index = trust.bundle.find(subject.issuer()) orelse unreachable; // ZURL PATCH
+                            const issuer_cert: Certificate = .{ // ZURL PATCH
+                                .buffer = trust.bundle.bytes.items, // ZURL PATCH
+                                .index = issuer_index, // ZURL PATCH
+                            }; // ZURL PATCH
+                            leaf_issuer = issuer_cert.parse() catch unreachable; // ZURL PATCH
+                        } // ZURL PATCH
+                    } else |_| {} // ZURL PATCH
+                    break :verify trusted; // ZURL PATCH
                 }) {
+                    try checkRevocation(crl_list, require_staple, staple, leaf_serial, leaf_issuer orelse return error.TlsCertificateNotVerified, now_sec); // ZURL PATCH
                     return;
                 } else |err| switch (err) {
                     error.CertificateIssuerNotFound => {},
@@ -3481,6 +3758,30 @@ pub const quic = struct {
         // Every certificate was read and none of them reached a trust
         // root. `init` reports the same name through `tryDownloadRootCert`.
         return error.TlsCertificateNotVerified;
+    }
+
+    /// Runs the revocation checks of `--crlfile` and `--cert-status` for
+    /// one leaf whose issuer is known.
+    ///
+    /// ZURL PATCH: not upstream. Both transports call this at the moment the
+    /// trust chain reached a root, which is when the leaf, its issuer, and
+    /// the staple of a TLS 1.3 server are all in scope. The CRL check runs
+    /// with or without a staple, and a missing staple is a refusal only
+    /// when the session asked for one.
+    fn checkRevocation(
+        crl_list: ?*const crl.List,
+        require_staple: bool,
+        staple: ?[]const u8,
+        serial_der: []const u8,
+        issuer: Certificate.Parsed,
+        now_sec: i64,
+    ) VerifyCertificateError!void {
+        if (crl_list) |list| try list.check(serial_der, issuer, now_sec);
+        if (staple) |response| {
+            try ocsp.verify(response, serial_der, issuer, now_sec);
+        } else if (require_staple) {
+            return error.TlsCertificateStatusMissing;
+        }
     }
 
     /// Writes the ALPN extension for `protocols`, and gives back the bytes
@@ -4675,6 +4976,7 @@ pub const test_oid_sha384_with_rsa = [_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 
 /// `id-kp-emailProtection`, 1.3.6.1.5.5.7.3.4. A purpose that is not
 /// server authentication.
 const test_oid_email_protection = [_]u8{ 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x04 };
+const test_oid_ocsp_signing = [_]u8{ 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x09 };
 /// 1.3.6.1.4.1.99999.1, which sits in a private arc and names nothing.
 /// The minter writes it as the identifier of a critical extension that no
 /// client can read.
@@ -4798,6 +5100,8 @@ pub const MintExtKeyUsage = enum {
     server_auth,
     /// `id-kp-emailProtection`, 1.3.6.1.5.5.7.3.4.
     email_protection,
+    /// `id-kp-OCSPSigning`, 1.3.6.1.5.5.7.3.9.
+    ocsp_signing,
     /// `anyExtendedKeyUsage`, 2.5.29.37.0, which names every purpose.
     any,
 };
@@ -5037,6 +5341,7 @@ pub fn mint(
             switch (usage) {
                 .server_auth => tbs.oid(&oid_server_auth),
                 .email_protection => tbs.oid(&test_oid_email_protection),
+                .ocsp_signing => tbs.oid(&test_oid_ocsp_signing),
                 .any => tbs.oid(&oid_any_ext_key_usage),
             }
             tbs.wrapDer(seq, 0x30);
@@ -5609,7 +5914,7 @@ fn verifyAgainstRoot(
     const body = certificateMessage(&body_buf, certs);
 
     var key: quic.CertificateKey = .empty;
-    return quic.verifyCertificate(body, .{ .explicit = host }, ca, test_now, &key);
+    return quic.verifyCertificate(body, .{ .explicit = host }, ca, false, null, test_now, &key); // ZURL PATCH: the revocation asks, off for the chain tests.
 }
 
 test "the whole certificate check refuses a forged leaf signed by a trusted leaf" {

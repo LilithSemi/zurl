@@ -120,6 +120,17 @@ pub const Error = error{
     /// `SSL_CERT_FILE` named a file that zurl could not read as
     /// certificates.
     CaCertBadFile,
+    /// A revocation list did not load. `--crlfile` named a file that zurl
+    /// could not read as a certificate revocation list. This is curl's
+    /// `CURLE_SSL_CRL_BADFILE`.
+    CrlBadFile,
+    /// The certificate status of the peer did not verify. `--cert-status`
+    /// asked for a stapled OCSP response, and the one that arrived was
+    /// missing, malformed, stale, or said revoked. This is curl's
+    /// `CURLE_SSL_INVALIDCERTSTATUS`, and it is its own name beside
+    /// `PeerFailedVerification` because curl gives the two different exit
+    /// codes: 60 for the certificate, 91 for the status.
+    SslInvalidCertStatus,
     /// The transfer went over its size limit.
     FileSizeExceeded,
     /// The transfer asked for a decoded body and the peer answered in a
@@ -382,6 +393,8 @@ const rows = [_]Row{
     .{ .err = error.TftpFileExists, .code = 73 }, // CURLE_REMOTE_FILE_EXISTS
     .{ .err = error.TftpNoSuchUser, .code = 74 }, // CURLE_TFTP_NOSUCHUSER
     .{ .err = error.CaCertBadFile, .code = 77 }, // CURLE_SSL_CACERT_BADFILE
+    .{ .err = error.CrlBadFile, .code = 82 }, // CURLE_SSL_CRL_BADFILE
+    .{ .err = error.SslInvalidCertStatus, .code = 91 }, // CURLE_SSL_INVALIDCERTSTATUS
     .{ .err = error.RemoteFileNotFound, .code = 78 }, // CURLE_REMOTE_FILE_NOT_FOUND
     .{ .err = error.HeaderLineTooLarge, .code = 100 }, // CURLE_TOO_LARGE
 };

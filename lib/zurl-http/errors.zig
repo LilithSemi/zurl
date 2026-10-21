@@ -124,6 +124,8 @@ const rows = [_]Row{
     .{ .err = error.SslConnectError, .mapped = error.SslConnectError },
     .{ .err = error.PeerFailedVerification, .mapped = error.PeerFailedVerification },
     .{ .err = error.CaCertBadFile, .mapped = error.CaCertBadFile },
+    .{ .err = error.CrlBadFile, .mapped = error.CrlBadFile },
+    .{ .err = error.SslInvalidCertStatus, .mapped = error.SslInvalidCertStatus },
     .{ .err = error.ReadError, .mapped = error.ReadError },
     // `--compressed` asked for a decoded body and this build has no
     // decoder for what came back. Nothing on the wire failed, so this

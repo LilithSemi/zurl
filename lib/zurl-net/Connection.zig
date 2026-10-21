@@ -283,6 +283,19 @@ pub const Tls = struct {
     /// does through `Content-Length` and chunked framing. It is not safe
     /// for one that does not, so the default refuses a truncated stream.
     allow_truncation_attacks: bool = false,
+    /// Whether the session asks for a stapled OCSP response and refuses
+    /// the peer when none arrives or when it does not vouch for the leaf.
+    /// This is `--cert-status`.
+    ///
+    /// **It rides with the trust check.** A staple anchors on the issuer
+    /// of the leaf, so a session that verifies nothing has nothing to
+    /// anchor on. `-k`/`--insecure` turns both off together, the way it
+    /// turns the host check and the trust check off together.
+    require_staple: bool = false,
+    /// The revocation list the leaf of the peer chain is checked against.
+    /// This is `--crlfile`. Null checks nothing, which is the default,
+    /// because a list nobody gave zurl says nothing about any peer.
+    crl: ?*const zurl_tls.crl.List = null,
 };
 
 pub const Options = struct {
@@ -467,6 +480,10 @@ pub fn init(
         // And the ALPN offer, which the client hello carries and the
         // client checks the answer against. See `Tls.alpn_protocols`.
         .alpn_protocols = tls_options.alpn_protocols,
+        // ZURL PATCH: the revocation asks. The staple request rides the
+        // ZURL PATCH: client hello and the CRL rides the chain walk.
+        .require_staple = tls_options.require_staple, // ZURL PATCH
+        .crl = tls_options.crl, // ZURL PATCH
     }) catch |err| switch (err) {
         // The TLS client says only that a read or a write failed. The
         // socket knows which fault it was, so report that instead. Both

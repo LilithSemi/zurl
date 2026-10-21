@@ -49,6 +49,7 @@ const std = @import("std");
 const Io = std.Io;
 const quic = @import("zurl-quic");
 const quic_tls = @import("zurl-quic-tls");
+const zurl_tls = @import("zurl-tls"); // ZURL PATCH: the revocation list type of `--crlfile`.
 
 const packet = quic.packet;
 const protection = quic.protection;
@@ -274,6 +275,14 @@ pub const Options = struct {
     verify_host: bool,
     /// Which roots the peer certificate chain must reach.
     trust: Trust,
+    /// Whether the session asks for a stapled OCSP response and refuses
+    /// the peer when none arrives or when it does not vouch for the leaf.
+    /// This is `--cert-status` on a QUIC connection. False is `-k` as
+    /// well: a session that verifies nothing has nothing to anchor on.
+    require_staple: bool = false, // ZURL PATCH
+    /// The revocation list the leaf of the peer chain is checked against.
+    /// This is `--crlfile` on a QUIC connection.
+    crl: ?*const zurl_tls.crl.List = null, // ZURL PATCH
     /// The protocols the ALPN extension offers. RFC 9001 section 8.1
     /// makes it mandatory, so an empty list is refused.
     alpn: []const []const u8,
@@ -669,6 +678,11 @@ pub const Connection = struct {
             .initial_buffer = initial_buffer,
             .handshake_buffer = handshake_buffer,
             .application_buffer = application_buffer,
+            // ZURL PATCH: the revocation asks, which ride to the chain
+            // ZURL PATCH: walk the vendored client runs for both
+            // ZURL PATCH: transports.
+            .require_staple = options.require_staple, // ZURL PATCH
+            .crl = options.crl, // ZURL PATCH
         }) catch return error.HandshakeFailed;
 
         var local: Io.net.IpAddress = switch (options.address) {

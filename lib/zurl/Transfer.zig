@@ -255,6 +255,21 @@ pub const Options = struct {
     /// that needs it. A later transfer's `ca` is ignored, the same way
     /// curl's easy handle keeps one trust store for its whole life.
     ca: zurl_core.ca.Inputs = .{},
+    /// Whether a TLS hop asks the peer for a stapled OCSP response and
+    /// refuses the connection when none arrives or when the one that
+    /// arrives does not vouch for the leaf. This is `--cert-status`.
+    ///
+    /// The ask rides with the trust check: `-k`/`--insecure` turns it off
+    /// with the rest of the verification, the way curl does.
+    cert_status: bool = false,
+    /// A file of certificate revocation lists, in PEM or DER. This is
+    /// `--crlfile`. The leaf of every peer chain is checked against the
+    /// list its own issuer signed.
+    ///
+    /// A `Client` loads the list once, from the first transfer that
+    /// needs it, the way it loads the trust roots. A file that does not
+    /// read as a revocation list fails the transfer with curl's exit 82.
+    crlfile: ?[]const u8 = null,
     /// Which protocols the url may name. This is `--proto`.
     ///
     /// `Client.perform` refuses a url outside this set with

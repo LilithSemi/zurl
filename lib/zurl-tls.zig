@@ -16,6 +16,19 @@ pub const certificate = @import("zurl-tls/certificate.zig");
 
 pub const loader = @import("zurl-tls/loader.zig");
 
+/// A certificate revocation list, for `--crlfile`. `Client` checks the
+/// leaf of every chain against the list a caller hands it, and
+/// `zurl.Client` loads the list from the file the flag names.
+pub const crl = @import("zurl-tls/crl.zig");
+
+/// An OCSP response, for the staple `--cert-status` asks for. `Client`
+/// verifies the staple a server sends against the issuer of the leaf.
+pub const ocsp = @import("zurl-tls/ocsp.zig");
+
+/// Signature checks over bytes that are not a certificate. `crl` and
+/// `ocsp` both reach it; `Client` does not.
+pub const signature = @import("zurl-tls/signature.zig");
+
 /// A copy of `std.crypto.tls.Client`, with a patch that lets it speak to a
 /// server that has an ECDSA certificate and offers only TLS 1.2. The file
 /// `zurl-tls/UPSTREAM` says what the patch is and how to re-sync the copy.
@@ -40,6 +53,9 @@ test {
     _ = bundle;
     _ = certificate;
     _ = loader;
+    _ = crl;
+    _ = ocsp;
+    _ = signature;
     _ = Client;
     _ = test_server;
 }
