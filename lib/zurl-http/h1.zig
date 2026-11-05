@@ -4876,15 +4876,10 @@ const Exchange = struct {
         // never went out.
         pooled.connection.flush() catch return error.WriteError;
 
-        exchange.http_reader = .{
-            .in = pooled.connection.reader(),
-            .state = .ready,
-            // Filled when `bodyReaderDecompressing` is called.
-            .interface = undefined,
-            // The same number that sized the connection's read buffer, so
-            // the bound and the room for it cannot drift apart.
-            .max_head_len = engine_state.read_buffer_len,
-        };
+        exchange.http_reader = responseReader(
+            pooled.connection.reader(),
+            engine_state.read_buffer_len,
+        );
 
         const head = receiveResponseHead(
             exchange,
@@ -5180,6 +5175,28 @@ const Exchange = struct {
     /// One `receiveHead`, as its own task.
     fn receiveHeadTask(reader: *std.http.Reader) std.http.Reader.HeadError![]const u8 {
         return reader.receiveHead();
+    }
+
+    /// The reader for the answer to a request this client sent. Zig 0.17.1
+    /// gave `std.http.Reader` a `side`, and 0.17.0 has no such field, so the
+    /// shape is chosen here and one source builds with either compiler.
+    fn responseReader(in: *std.Io.Reader, max_head_len: usize) std.http.Reader {
+        if (comptime @hasField(std.http.Reader, "side")) return .{
+            .in = in,
+            .state = .ready,
+            // Filled when `bodyReaderDecompressing` is called.
+            .interface = undefined,
+            // The same number that sized the connection's read buffer, so
+            // the bound and the room for it cannot drift apart.
+            .max_head_len = max_head_len,
+            .side = .response,
+        };
+        return .{
+            .in = in,
+            .state = .ready,
+            .interface = undefined,
+            .max_head_len = max_head_len,
+        };
     }
 
     /// Reads response heads until one is the answer, and returns it.
